@@ -1,0 +1,20 @@
+# PgQueue4Go Configuration File
+# This file demonstrates all available configuration options
+
+database:
+  url: "postgres://user:password@localhost:5432/pgqueue?sslmode=disable"
+  max_connections: 25
+  max_idle_time: "30m"
+  max_lifetime: "1h"
+  connect_timeout: "10s"
+  statement_timeout: "30s"
+
+queue:
+  batch_size: 10
+  worker_count: 5
+  retry_timeout: "5m"
+  channel: "pgqueue_events"
+
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "text" # text, json

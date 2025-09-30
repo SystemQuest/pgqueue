@@ -12,6 +12,7 @@ type Config struct {
 	Database DatabaseConfig `mapstructure:"database"`
 	Queue    QueueConfig    `mapstructure:"queue"`
 	Logging  LoggingConfig  `mapstructure:"logging"`
+	Prefix   string         `mapstructure:"prefix"`
 }
 
 // DatabaseConfig holds database configuration
@@ -40,11 +41,23 @@ type LoggingConfig struct {
 
 // Load loads configuration from file and environment variables
 func Load() (*Config, error) {
+	return LoadWithConfigFile("")
+}
+
+// LoadWithConfigFile loads configuration with a specific config file path
+func LoadWithConfigFile(configFile string) (*Config, error) {
 	viper.SetConfigName("pgqueue")
 	viper.SetConfigType("yaml")
-	viper.AddConfigPath(".")
-	viper.AddConfigPath("$HOME/.pgqueue")
-	viper.AddConfigPath("/etc/pgqueue")
+
+	if configFile != "" {
+		// Use specific config file if provided
+		viper.SetConfigFile(configFile)
+	} else {
+		// Only search for pgqueue.yaml specifically to avoid conflicts
+		viper.AddConfigPath(".")
+		viper.AddConfigPath("$HOME/.pgqueue")
+		viper.AddConfigPath("/etc/pgqueue")
+	}
 
 	// Set defaults
 	setDefaults()
@@ -58,6 +71,7 @@ func Load() (*Config, error) {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
+		// Config file not found is OK, we'll use defaults and env vars
 	}
 
 	var config Config

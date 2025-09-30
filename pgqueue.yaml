@@ -1,0 +1,16 @@
+database:
+  url: "postgres://testuser:testpassword@localhost:5432/postgres?sslmode=disable"
+  max_connections: 10
+  max_idle_time: "15m"
+  max_lifetime: "2h"
+  connect_timeout: "15s"
+
+queue:
+  batch_size: 20
+  worker_count: 8
+  retry_timeout: "10m"
+  channel: "pgqueue_events"
+
+logging:
+  level: "debug"
+  format: "text"
