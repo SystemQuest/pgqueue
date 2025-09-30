@@ -160,14 +160,27 @@ func TestQueriesNextJobs(t *testing.T) {
 
 // TestQueriesNextJobsConcurrent migrates pgqueuer's test_queries_next_jobs_concurrent
 // Tests concurrent job dequeuing with parametrized N and concurrency values
+// @pytest.mark.parametrize("N", (1, 2, 64)) × @pytest.mark.parametrize("concurrency", (1, 2, 4, 16))
 func TestQueriesNextJobsConcurrent(t *testing.T) {
+	// Generate all combinations like pgqueuer's parametrize decorators
 	testCases := []struct {
 		name        string
 		N           int
 		concurrency int
 	}{
+		// N=1 × concurrency=(1,2,4,16)
 		{"1x1", 1, 1},
+		{"1x2", 1, 2},
+		{"1x4", 1, 4},
+		{"1x16", 1, 16},
+		// N=2 × concurrency=(1,2,4,16)
+		{"2x1", 2, 1},
 		{"2x2", 2, 2},
+		{"2x4", 2, 4},
+		{"2x16", 2, 16},
+		// N=64 × concurrency=(1,2,4,16)
+		{"64x1", 64, 1},
+		{"64x2", 64, 2},
 		{"64x4", 64, 4},
 		{"64x16", 64, 16},
 	}
