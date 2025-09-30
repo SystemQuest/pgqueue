@@ -219,6 +219,137 @@ func (qb *QueryBuilder) CreateUpgradeQueries() []string {
 	}
 }
 
+// CreateEnqueueQuery generates the SQL query to insert a new job into the queue
+func (qb *QueryBuilder) CreateEnqueueQuery() string {
+	return fmt.Sprintf(`
+		INSERT INTO %s (priority, entrypoint, payload, status)
+		VALUES ($1, $2, $3, 'queued')`, qb.Settings.QueueTable)
+}
+
+// CreateEnqueueBatchQuery generates the SQL query to insert a job (used in batch operations)
+func (qb *QueryBuilder) CreateEnqueueBatchQuery() string {
+	return qb.CreateEnqueueQuery()
+}
+
+// CreateDequeueQuery generates the SQL query to dequeue jobs
+func (qb *QueryBuilder) CreateDequeueQuery() string {
+	return fmt.Sprintf(`
+		WITH next_job_queued AS (
+			SELECT id, priority, created, updated, status, entrypoint, payload
+			FROM %s
+			WHERE
+				entrypoint = ANY($2)
+				AND status = 'queued'
+			ORDER BY priority DESC, id ASC
+			FOR UPDATE SKIP LOCKED
+			LIMIT $1
+		),
+		next_job_retry AS (
+			SELECT id, priority, created, updated, status, entrypoint, payload
+			FROM %s
+			WHERE
+				entrypoint = ANY($2)
+				AND status = 'picked'
+				AND ($3::interval IS NOT NULL AND updated < NOW() - $3::interval)
+			ORDER BY updated DESC, id ASC
+			FOR UPDATE SKIP LOCKED
+			LIMIT $1
+		),
+		combined_jobs AS (
+			SELECT DISTINCT id, priority, created, updated, status, entrypoint, payload
+			FROM (
+				SELECT id, priority, created, updated, status, entrypoint, payload FROM next_job_queued
+				UNION ALL
+				SELECT id, priority, created, updated, status, entrypoint, payload FROM next_job_retry WHERE $3::interval IS NOT NULL
+			) AS combined
+		),
+		updated AS (
+			UPDATE %s
+			SET status = 'picked', updated = NOW()
+			WHERE id = ANY(SELECT id FROM combined_jobs)
+			RETURNING id, priority, created, updated, status, entrypoint, payload
+		)
+		SELECT id, priority, created, updated, status, entrypoint, payload FROM updated ORDER BY priority DESC, id ASC`,
+		qb.Settings.QueueTable, qb.Settings.QueueTable, qb.Settings.QueueTable)
+}
+
+// CreateCompleteJobQuery generates the SQL query to complete a job and log statistics
+func (qb *QueryBuilder) CreateCompleteJobQuery() string {
+	return fmt.Sprintf(`
+		WITH deleted AS (
+			DELETE FROM %s
+			WHERE id = $1
+			RETURNING id, priority, entrypoint,
+				DATE_TRUNC('sec', created at time zone 'UTC') AS created,
+				DATE_TRUNC('sec', AGE(updated, created)) AS time_in_queue
+		)
+		INSERT INTO %s (priority, entrypoint, time_in_queue, status, created, count)
+		SELECT priority, entrypoint, time_in_queue, $2::%s, created, 1
+		FROM deleted`,
+		qb.Settings.QueueTable, qb.Settings.StatisticsTable, qb.Settings.StatisticsTableStatusType)
+}
+
+// CreateQueueSizeQuery generates the SQL query to count jobs in the queue
+func (qb *QueryBuilder) CreateQueueSizeQuery() string {
+	return fmt.Sprintf(`
+		SELECT
+			count(*) AS count,
+			priority,
+			entrypoint,
+			status
+		FROM %s
+		GROUP BY entrypoint, priority, status
+		ORDER BY count, entrypoint, priority, status`,
+		qb.Settings.QueueTable)
+}
+
+// CreateDeleteFromQueueQuery generates the SQL query to delete jobs by entrypoint
+func (qb *QueryBuilder) CreateDeleteFromQueueQuery() string {
+	return fmt.Sprintf("DELETE FROM %s WHERE entrypoint = ANY($1)", qb.Settings.QueueTable)
+}
+
+// CreateTruncateQueueQuery generates the SQL query to truncate the queue table
+func (qb *QueryBuilder) CreateTruncateQueueQuery() string {
+	return fmt.Sprintf("TRUNCATE %s", qb.Settings.QueueTable)
+}
+
+// CreateLogStatisticsQuery generates the SQL query to get log statistics
+func (qb *QueryBuilder) CreateLogStatisticsQuery() string {
+	return fmt.Sprintf(`
+		SELECT
+			count,
+			created,
+			priority,
+			time_in_queue,
+			status,
+			entrypoint
+		FROM %s
+		ORDER BY created DESC
+		LIMIT $1`,
+		qb.Settings.StatisticsTable)
+}
+
+// CreateDeleteFromLogQuery generates the SQL query to delete log entries by entrypoint
+func (qb *QueryBuilder) CreateDeleteFromLogQuery() string {
+	return fmt.Sprintf("DELETE FROM %s WHERE entrypoint = ANY($1)", qb.Settings.StatisticsTable)
+}
+
+// CreateTruncateLogQuery generates the SQL query to truncate the statistics table
+func (qb *QueryBuilder) CreateTruncateLogQuery() string {
+	return fmt.Sprintf("TRUNCATE %s", qb.Settings.StatisticsTable)
+}
+
+// CreateHasColumnQuery generates the SQL query to check if a column exists
+func (qb *QueryBuilder) CreateHasColumnQuery() string {
+	return `
+		SELECT EXISTS (
+			SELECT 1 
+			FROM information_schema.columns 
+			WHERE table_name = $1 
+			AND column_name = $2
+		)`
+}
+
 // FormatQuery formats a multi-line SQL query for better readability
 func FormatQuery(query string) string {
 	lines := strings.Split(query, "\n")
