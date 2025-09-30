@@ -8,13 +8,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/systemquest/pgqueue4go/pkg/config"
-	"github.com/systemquest/pgqueue4go/pkg/db/generated"
+	"github.com/systemquest/pgqueue4go/pkg/queries"
 )
 
 // DB wraps the database connection pool and provides high-level operations
 type DB struct {
 	pool    *pgxpool.Pool
-	queries *generated.Queries
+	queries *queries.Queries
 }
 
 // New creates a new database connection
@@ -49,7 +49,7 @@ func New(ctx context.Context, cfg *config.DatabaseConfig) (*DB, error) {
 
 	db := &DB{
 		pool:    pool,
-		queries: generated.New(pool),
+		queries: queries.NewQueries(pool),
 	}
 
 	return db, nil
@@ -63,8 +63,8 @@ func (db *DB) Close() {
 	}
 }
 
-// Queries returns the generated queries interface
-func (db *DB) Queries() *generated.Queries {
+// Queries returns the queries interface
+func (db *DB) Queries() *queries.Queries {
 	return db.queries
 }
 

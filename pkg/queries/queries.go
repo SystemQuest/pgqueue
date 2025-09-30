@@ -285,8 +285,17 @@ func (qb *QueryBuilder) CreateCompleteJobQuery() string {
 		)
 		INSERT INTO %s (priority, entrypoint, time_in_queue, status, created, count)
 		SELECT priority, entrypoint, time_in_queue, $2::%s, created, 1
-		FROM deleted`,
-		qb.Settings.QueueTable, qb.Settings.StatisticsTable, qb.Settings.StatisticsTableStatusType)
+		FROM deleted
+		ON CONFLICT (
+			priority,
+			entrypoint,
+			DATE_TRUNC('sec', created at time zone 'UTC'),
+			DATE_TRUNC('sec', time_in_queue),
+			status
+		)
+		DO UPDATE
+		SET count = %s.count + EXCLUDED.count`,
+		qb.Settings.QueueTable, qb.Settings.StatisticsTable, qb.Settings.StatisticsTableStatusType, qb.Settings.StatisticsTable)
 }
 
 // CreateQueueSizeQuery generates the SQL query to count jobs in the queue

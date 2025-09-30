@@ -30,13 +30,19 @@ build:
 	@mkdir -p $(BUILD_DIR)
 	@go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/pgqueue
 
-## Start PostgreSQL test database (schema installed automatically via migration)
-test-up:
+## Build Linux binary for Docker
+build-linux:
+	@echo "Building $(BINARY_NAME) for Linux..."
+	@mkdir -p $(BUILD_DIR)
+	@GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux ./cmd/pgqueue
+
+## Start PostgreSQL test database (schema installed automatically via CLI)
+test-up: build-linux
 	@echo "Starting PostgreSQL test database with schema..."
 	@docker-compose -f test/docker/docker-compose.test.yml up --force-recreate --build -d postgres
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 5
-	@echo "Test environment ready! (Schema installed from migration files)"
+	@echo "Test environment ready! (Schema installed using pgqueue4go CLI)"
 
 ## Run unit tests only (no database required)
 test-unit:

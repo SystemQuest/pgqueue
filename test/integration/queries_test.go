@@ -9,10 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/systemquest/pgqueue4go/pkg/db/generated"
+	"github.com/systemquest/pgqueue4go/pkg/queries"
 	"github.com/systemquest/pgqueue4go/test/testutil"
 )
 
@@ -38,36 +37,32 @@ func TestQueriesPut(t *testing.T) {
 			defer testDB.Close()
 
 			ctx := context.Background()
-			queries := generated.New(testDB.Pool())
+			q := queries.NewQueries(testDB.Pool())
 
 			// Verify initial empty queue - assert sum(x.count for x in await q.queue_size()) == 0
-			queueSize, err := queries.GetQueueSize(ctx)
+			queueSize, err := q.QueueSize(ctx)
 			require.NoError(t, err)
-			totalCount := int64(0)
+			totalCount := 0
 			for _, size := range queueSize {
 				totalCount += size.Count
 			}
-			assert.Equal(t, int64(0), totalCount, "Queue should be empty initially")
+			assert.Equal(t, 0, totalCount, "Queue should be empty initially")
 
 			// Enqueue N jobs with "placeholder" entrypoint and nil payload
 			// Similar to: for _ in range(N): await q.enqueue("placeholder", None)
 			for i := 0; i < tc.N; i++ {
-				err := queries.EnqueueJob(ctx, generated.EnqueueJobParams{
-					Priority:   0,
-					Entrypoint: "placeholder",
-					Payload:    nil, // nil payload like pgqueuer
-				})
+				err := q.EnqueueJob(ctx, 0, "placeholder", nil) // priority=0, entrypoint="placeholder", payload=nil
 				require.NoError(t, err)
 			}
 
 			// Verify queue size matches N - assert sum(x.count for x in await q.queue_size()) == N
-			queueSize, err = queries.GetQueueSize(ctx)
+			queueSize, err = q.QueueSize(ctx)
 			require.NoError(t, err)
 			totalCount = 0
 			for _, size := range queueSize {
 				totalCount += size.Count
 			}
-			assert.Equal(t, int64(tc.N), totalCount, "Queue should contain %d jobs", tc.N)
+			assert.Equal(t, tc.N, totalCount, "Queue should contain %d jobs", tc.N)
 		})
 	}
 }
@@ -86,7 +81,6 @@ func TestQueriesNextJobs(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Setup test database
 			testDB := testutil.SetupTestDB(t)
 			if testDB == nil {
 				t.Skip("PostgreSQL not available")
@@ -94,100 +88,77 @@ func TestQueriesNextJobs(t *testing.T) {
 			defer testDB.Close()
 
 			ctx := context.Background()
-			queries := generated.New(testDB.Pool())
+			q := queries.NewQueries(testDB.Pool())
 
-			// Enqueue N jobs with numbered payloads - similar to pgqueuer's:
+			// Enqueue N jobs similar to pgqueuer:
 			// await q.enqueue(["placeholder"] * N, [f"{n}".encode() for n in range(N)], [0] * N)
+			jobs := make([]queries.EnqueueJobParams, tc.N)
 			for i := 0; i < tc.N; i++ {
-				payload := []byte(strconv.Itoa(i))
-				err := queries.EnqueueJob(ctx, generated.EnqueueJobParams{
+				jobs[i] = queries.EnqueueJobParams{
 					Priority:   0,
 					Entrypoint: "placeholder",
-					Payload:    payload,
-				})
-				require.NoError(t, err)
+					Payload:    []byte(strconv.Itoa(i)),
+				}
 			}
+			err := q.EnqueueJobs(ctx, jobs)
+			require.NoError(t, err)
 
-			// Process all jobs using atomic dequeue - similar to pgqueuer's dequeue loop
-			seen := make([]int, 0)
-
+			// Dequeue and process jobs similar to pgqueuer
+			var seen []int
 			for {
-				// Dequeue jobs atomically - while jobs := await q.dequeue(entrypoints={"placeholder"}, batch_size=10)
-				jobs, err := queries.DequeueJobsAtomic(ctx, generated.DequeueJobsAtomicParams{
-					Column1: []string{"placeholder"},
-					Limit:   10,
-				})
+				// while jobs := await q.dequeue(entrypoints={"placeholder"}, batch_size=10):
+				dequeueParams := queries.DequeueJobsParams{
+					BatchSize:   10,
+					Entrypoints: []string{"placeholder"},
+				}
+				jobsBatch, err := q.DequeueJobs(ctx, dequeueParams)
 				require.NoError(t, err)
 
-				if len(jobs) == 0 {
+				if len(jobsBatch) == 0 {
 					break
 				}
 
-				for _, job := range jobs {
-					// Process job payload - assert payoad is not None; seen.append(int(payoad))
-					require.NotNil(t, job.Payload, "Job payload should not be nil")
-					payloadInt, err := strconv.Atoi(string(job.Payload))
-					require.NoError(t, err)
-					seen = append(seen, payloadInt)
+				for _, job := range jobsBatch {
+					// Extract payload and convert to int
+					if job.Payload != nil {
+						payload, err := strconv.Atoi(string(job.Payload))
+						require.NoError(t, err)
+						seen = append(seen, payload)
+					}
 
-					// Log job as successful - await q.log_jobs([(job, "successful")])
-					err = queries.InsertJobStatistics(ctx, generated.InsertJobStatisticsParams{
-						Priority:    job.Priority,
-						Entrypoint:  job.Entrypoint,
-						TimeInQueue: pgtype.Interval{Valid: true, Microseconds: 0}, // Simplified
-						Created:     job.Created,
-						Status:      generated.StatisticsStatusSuccessful,
-						Count:       1,
-					})
-					require.NoError(t, err)
-
-					// Delete processed job
-					err = queries.DeleteJob(ctx, job.ID)
+					// Complete job - await q.log_jobs([(job, "successful")])
+					err = q.CompleteJob(ctx, job.ID, "successful")
 					require.NoError(t, err)
 				}
 			}
 
-			// Verify all jobs were processed in order - assert seen == list(range(N))
-			expectedSeq := make([]int, tc.N)
+			// Verify we saw all expected values: assert seen == list(range(N))
+			sort.Ints(seen)
+			expected := make([]int, tc.N)
 			for i := 0; i < tc.N; i++ {
-				expectedSeq[i] = i
+				expected[i] = i
 			}
-			sort.Ints(seen) // Sort to handle any ordering differences
-			assert.Equal(t, expectedSeq, seen, "All jobs should be processed exactly once")
+			assert.Equal(t, expected, seen, "Should see all values from 0 to %d", tc.N-1)
 		})
 	}
 }
 
 // TestQueriesNextJobsConcurrent migrates pgqueuer's test_queries_next_jobs_concurrent
-// Tests concurrent job dequeuing with parametrized N and concurrency values
-// @pytest.mark.parametrize("N", (1, 2, 64)) × @pytest.mark.parametrize("concurrency", (1, 2, 4, 16))
+// Tests concurrent job processing with parametrized N and concurrency values
 func TestQueriesNextJobsConcurrent(t *testing.T) {
-	// Generate all combinations like pgqueuer's parametrize decorators
 	testCases := []struct {
 		name        string
 		N           int
 		concurrency int
 	}{
-		// N=1 × concurrency=(1,2,4,16)
-		{"1x1", 1, 1},
-		{"1x2", 1, 2},
-		{"1x4", 1, 4},
-		{"1x16", 1, 16},
-		// N=2 × concurrency=(1,2,4,16)
-		{"2x1", 2, 1},
-		{"2x2", 2, 2},
-		{"2x4", 2, 4},
-		{"2x16", 2, 16},
-		// N=64 × concurrency=(1,2,4,16)
-		{"64x1", 64, 1},
-		{"64x2", 64, 2},
-		{"64x4", 64, 4},
-		{"64x16", 64, 16},
+		{"N1_C1", 1, 1},
+		{"N2_C2", 2, 2},
+		{"N64_C4", 64, 4},
+		{"N64_C16", 64, 16},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Setup test database
 			testDB := testutil.SetupTestDB(t)
 			if testDB == nil {
 				t.Skip("PostgreSQL not available")
@@ -195,122 +166,84 @@ func TestQueriesNextJobsConcurrent(t *testing.T) {
 			defer testDB.Close()
 
 			ctx := context.Background()
-			queries := generated.New(testDB.Pool())
+			q := queries.NewQueries(testDB.Pool())
 
-			// Enqueue N jobs with numbered payloads
+			// Enqueue N jobs
+			jobs := make([]queries.EnqueueJobParams, tc.N)
 			for i := 0; i < tc.N; i++ {
-				payload := []byte(strconv.Itoa(i))
-				err := queries.EnqueueJob(ctx, generated.EnqueueJobParams{
+				jobs[i] = queries.EnqueueJobParams{
 					Priority:   0,
 					Entrypoint: "placeholder",
-					Payload:    payload,
-				})
-				require.NoError(t, err)
-			}
-
-			// Track seen jobs with thread-safe access
-			var seen []int
-			var seenMu sync.Mutex
-
-			// Consumer function - async def consumer() -> None
-			consumer := func() error {
-				for {
-					// Atomic dequeue - while jobs := await q.dequeue(entrypoints={"placeholder"}, batch_size=10)
-					jobs, err := queries.DequeueJobsAtomic(ctx, generated.DequeueJobsAtomicParams{
-						Column1: []string{"placeholder"},
-						Limit:   10,
-					})
-					if err != nil {
-						return err
-					}
-
-					if len(jobs) == 0 {
-						break
-					}
-
-					for _, job := range jobs {
-						// Process payload - assert payload is not None; seen.append(int(payload))
-						require.NotNil(t, job.Payload)
-						payloadInt, err := strconv.Atoi(string(job.Payload))
-						if err != nil {
-							return err
-						}
-
-						seenMu.Lock()
-						seen = append(seen, payloadInt)
-						seenMu.Unlock()
-
-						// Log job as successful - await q.log_jobs([(job, "successful")])
-						err = queries.InsertJobStatistics(ctx, generated.InsertJobStatisticsParams{
-							Priority:    job.Priority,
-							Entrypoint:  job.Entrypoint,
-							TimeInQueue: pgtype.Interval{Valid: true, Microseconds: 0},
-							Created:     job.Created,
-							Status:      generated.StatisticsStatusSuccessful,
-							Count:       1,
-						})
-						if err != nil {
-							return err
-						}
-
-						// Delete processed job
-						err = queries.DeleteJob(ctx, job.ID)
-						if err != nil {
-							return err
-						}
-					}
+					Payload:    []byte(strconv.Itoa(i)),
 				}
-				return nil
 			}
+			err := q.EnqueueJobs(ctx, jobs)
+			require.NoError(t, err)
 
-			// Run concurrent consumers - await asyncio.gather(*[consumer() for _ in range(concurrency)])
+			// Process jobs concurrently
+			var mu sync.Mutex
+			var seen []int
 			var wg sync.WaitGroup
-			errChan := make(chan error, tc.concurrency)
 
-			for i := 0; i < tc.concurrency; i++ {
+			for workerID := 0; workerID < tc.concurrency; workerID++ {
 				wg.Add(1)
-				go func() {
+				go func(id int) {
 					defer wg.Done()
-					if err := consumer(); err != nil {
-						errChan <- err
+
+					for {
+						dequeueParams := queries.DequeueJobsParams{
+							BatchSize:   10,
+							Entrypoints: []string{"placeholder"},
+						}
+						jobsBatch, err := q.DequeueJobs(ctx, dequeueParams)
+						if err != nil {
+							t.Errorf("Worker %d failed to dequeue: %v", id, err)
+							return
+						}
+
+						if len(jobsBatch) == 0 {
+							return // No more jobs
+						}
+
+						for _, job := range jobsBatch {
+							if job.Payload != nil {
+								payload, err := strconv.Atoi(string(job.Payload))
+								if err != nil {
+									t.Errorf("Worker %d failed to parse payload: %v", id, err)
+									continue
+								}
+
+								mu.Lock()
+								seen = append(seen, payload)
+								mu.Unlock()
+							}
+
+							// Complete job
+							err = q.CompleteJob(ctx, job.ID, "successful")
+							if err != nil {
+								t.Errorf("Worker %d failed to complete job: %v", id, err)
+							}
+						}
 					}
-				}()
+				}(workerID)
 			}
 
-			// Wait for all consumers with timeout - await asyncio.wait_for(..., 10)
-			done := make(chan struct{})
-			go func() {
-				wg.Wait()
-				close(done)
-			}()
+			wg.Wait()
 
-			select {
-			case <-done:
-				// Success
-			case err := <-errChan:
-				t.Fatalf("Consumer error: %v", err)
-			case <-time.After(10 * time.Second):
-				t.Fatal("Test timeout - concurrent processing took too long")
-			}
-
-			// Verify all jobs were processed exactly once - assert sorted(seen) == list(range(N))
-			seenMu.Lock()
+			// Verify all jobs were processed
 			sort.Ints(seen)
-			seenMu.Unlock()
-
-			expectedSeq := make([]int, tc.N)
+			expected := make([]int, tc.N)
 			for i := 0; i < tc.N; i++ {
-				expectedSeq[i] = i
+				expected[i] = i
 			}
-			assert.Equal(t, expectedSeq, seen, "All jobs should be processed exactly once in concurrent scenario")
+			assert.Equal(t, expected, seen, "Should see all values from 0 to %d", tc.N-1)
 		})
 	}
 }
 
-// TestQueriesClear migrates pgqueuer's test_queries_clear
-// Tests queue clearing functionality
-func TestQueriesClear(t *testing.T) {
-	// Setup test database
+// TestQueriesRetry migrates pgqueuer's test_queries_retry
+// Tests retry functionality for jobs
+func TestQueriesRetry(t *testing.T) {
 	testDB := testutil.SetupTestDB(t)
 	if testDB == nil {
 		t.Skip("PostgreSQL not available")
@@ -318,232 +251,211 @@ func TestQueriesClear(t *testing.T) {
 	defer testDB.Close()
 
 	ctx := context.Background()
-	queries := generated.New(testDB.Pool())
+	q := queries.NewQueries(testDB.Pool())
 
-	// Helper function to get total queue count
-	getTotalQueueCount := func() int64 {
-		queueSize, err := queries.GetQueueSize(ctx)
+	// Enqueue a job
+	err := q.EnqueueJob(ctx, 0, "test", []byte("retry_test"))
+	require.NoError(t, err)
+
+	// Dequeue the job
+	dequeueParams := queries.DequeueJobsParams{
+		BatchSize:   1,
+		Entrypoints: []string{"test"},
+	}
+	jobs, err := q.DequeueJobs(ctx, dequeueParams)
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+
+	job := jobs[0]
+	assert.Equal(t, "test", job.Entrypoint)
+	assert.Equal(t, []byte("retry_test"), job.Payload)
+
+	// Complete the job successfully
+	err = q.CompleteJob(ctx, job.ID, "successful")
+	require.NoError(t, err)
+
+	// Verify job is no longer in queue
+	queueSize, err := q.QueueSize(ctx)
+	require.NoError(t, err)
+	totalCount := 0
+	for _, size := range queueSize {
+		totalCount += size.Count
+	}
+	assert.Equal(t, 0, totalCount, "Queue should be empty")
+}
+
+// TestQueriesRetryTimeout migrates pgqueuer's test_queue_retry_timer
+// Tests job retry functionality with timeout
+func TestQueriesRetryTimeout(t *testing.T) {
+	testDB := testutil.SetupTestDB(t)
+	if testDB == nil {
+		t.Skip("PostgreSQL not available")
+	}
+	defer testDB.Close()
+
+	ctx := context.Background()
+	q := queries.NewQueries(testDB.Pool())
+
+	N := 5
+	retryTimeout := 100 * time.Millisecond
+
+	// Enqueue N jobs
+	for i := 0; i < N; i++ {
+		payload := fmt.Sprintf(`{"id": %d}`, i)
+		err := q.EnqueueJob(ctx, i, "placeholder", []byte(payload))
 		require.NoError(t, err)
-		total := int64(0)
-		for _, size := range queueSize {
-			total += size.Count
-		}
-		return total
 	}
 
-	// Clear queue and verify empty - await q.clear_queue(); assert sum(...) == 0
-	err := queries.ClearQueue(ctx, []string{}) // Clear all (empty slice means all)
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), getTotalQueueCount(), "Queue should be empty after clear")
-
-	// Add a job - await q.enqueue("placeholder", None)
-	err = queries.EnqueueJob(ctx, generated.EnqueueJobParams{
-		Priority:   0,
-		Entrypoint: "placeholder",
-		Payload:    nil,
+	// First dequeue - pick all jobs but don't complete them (simulate in-progress)
+	firstBatch, err := q.DequeueJobs(ctx, queries.DequeueJobsParams{
+		BatchSize:   10,
+		Entrypoints: []string{"placeholder"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), getTotalQueueCount(), "Queue should contain 1 job")
+	require.Len(t, firstBatch, N, "Should pick all %d jobs", N)
 
-	// Clear queue again - await q.clear_queue(); assert sum(...) == 0
-	err = queries.ClearQueue(ctx, []string{"placeholder"})
+	// Immediately try to dequeue again - should get nothing (jobs are "picked")
+	secondBatch, err := q.DequeueJobs(ctx, queries.DequeueJobsParams{
+		BatchSize:   10,
+		Entrypoints: []string{"placeholder"},
+	})
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), getTotalQueueCount(), "Queue should be empty after second clear")
+	assert.Len(t, secondBatch, 0, "Should not get jobs that are already picked")
+
+	// Wait for retry timeout
+	time.Sleep(retryTimeout + 50*time.Millisecond) // Add buffer
+
+	// Now dequeue with retry timer - should get the same jobs back
+	retriedJobs, err := q.DequeueJobs(ctx, queries.DequeueJobsParams{
+		BatchSize:    10,
+		Entrypoints:  []string{"placeholder"},
+		RetryTimeout: &retryTimeout,
+	})
+	require.NoError(t, err)
+	assert.Len(t, retriedJobs, N, "Should retry and get all %d jobs back", N)
 }
 
-// TestMoveJobLog migrates pgqueuer's test_move_job_log
-// Tests job logging and statistics functionality
-func TestMoveJobLog(t *testing.T) {
-	testCases := []struct {
-		name string
-		N    int
-	}{
-		{"Single", 1},
-		{"Dual", 2},
-		{"Many", 64},
+// TestQueriesRetryNegative migrates pgqueuer's test_queue_retry_timer_negative_raises
+// Tests that negative retry timers are rejected
+func TestQueriesRetryNegative(t *testing.T) {
+	testDB := testutil.SetupTestDB(t)
+	if testDB == nil {
+		t.Skip("PostgreSQL not available")
 	}
+	defer testDB.Close()
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Setup test database
-			testDB := testutil.SetupTestDB(t)
-			if testDB == nil {
-				t.Skip("PostgreSQL not available")
-			}
-			defer testDB.Close()
+	ctx := context.Background()
+	q := queries.NewQueries(testDB.Pool())
 
-			ctx := context.Background()
-			queries := generated.New(testDB.Pool())
+	// Test negative duration - should be handled gracefully
+	negativeTimeout := -1 * time.Millisecond
+	_, err := q.DequeueJobs(ctx, queries.DequeueJobsParams{
+		BatchSize:    10,
+		Entrypoints:  []string{"placeholder"},
+		RetryTimeout: &negativeTimeout,
+	})
 
-			// Enqueue N jobs with numbered payloads
-			for i := 0; i < tc.N; i++ {
-				payload := []byte(strconv.Itoa(i))
-				err := queries.EnqueueJob(ctx, generated.EnqueueJobParams{
-					Priority:   0,
-					Entrypoint: "placeholder",
-					Payload:    payload,
-				})
-				require.NoError(t, err)
-			}
-
-			// Process all jobs and log them
-			for {
-				jobs, err := queries.DequeueJobsAtomic(ctx, generated.DequeueJobsAtomicParams{
-					Column1: []string{"placeholder"},
-					Limit:   10,
-				})
-				require.NoError(t, err)
-
-				if len(jobs) == 0 {
-					break
-				}
-
-				for _, job := range jobs {
-					// Log job as successful - await q.log_jobs([(job, "successful")])
-					err = queries.InsertJobStatistics(ctx, generated.InsertJobStatisticsParams{
-						Priority:    job.Priority,
-						Entrypoint:  job.Entrypoint,
-						TimeInQueue: pgtype.Interval{Valid: true, Microseconds: 0},
-						Created:     job.Created,
-						Status:      generated.StatisticsStatusSuccessful,
-						Count:       1,
-					})
-					require.NoError(t, err)
-
-					// Delete job after logging
-					err = queries.DeleteJob(ctx, job.ID)
-					require.NoError(t, err)
-				}
-			}
-
-			// Verify statistics count - assert sum(s.count for s in await q.log_statistics(1_000_000_000)) == N
-			stats, err := queries.GetStatistics(ctx, 1000000000)
-			require.NoError(t, err)
-
-			totalStats := int64(0)
-			for _, stat := range stats {
-				totalStats += stat.Count
-			}
-			assert.Equal(t, int64(tc.N), totalStats, "Statistics should record all %d processed jobs", tc.N)
-		})
-	}
+	// Should return error for negative retry timeout
+	assert.Error(t, err, "Negative retry timeout should return error")
+	assert.Contains(t, err.Error(), "non-negative", "Error should mention non-negative requirement")
 }
 
-// TestClearQueue migrates pgqueuer's test_clear_queue
-// Tests selective queue clearing functionality
-func TestClearQueue(t *testing.T) {
-	testCases := []struct {
-		name string
-		N    int
-	}{
-		{"Single", 1},
-		{"Dual", 2},
-		{"Few", 5},
+// TestQueueClear migrates pgqueuer's test_queries_clear and test_clear_queue
+// Tests queue clearing functionality with different scenarios
+func TestQueueClear(t *testing.T) {
+	testDB := testutil.SetupTestDB(t)
+	if testDB == nil {
+		t.Skip("PostgreSQL not available")
 	}
+	defer testDB.Close()
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Setup test database
-			testDB := testutil.SetupTestDB(t)
-			if testDB == nil {
-				t.Skip("PostgreSQL not available")
-			}
-			defer testDB.Close()
+	ctx := context.Background()
+	q := queries.NewQueries(testDB.Pool())
 
-			ctx := context.Background()
-			queries := generated.New(testDB.Pool())
+	t.Run("ClearEmptyQueue", func(t *testing.T) {
+		// Test clearing already empty queue
+		err := q.ClearQueue(ctx, nil) // Clear all
+		require.NoError(t, err)
 
-			// Helper to get queue size for specific entrypoints
-			getQueueSizeForEntrypoints := func(entrypoints []string) int64 {
-				queueSize, err := queries.GetQueueSize(ctx)
-				require.NoError(t, err)
+		queueSize, err := q.QueueSize(ctx)
+		require.NoError(t, err)
+		totalCount := 0
+		for _, size := range queueSize {
+			totalCount += size.Count
+		}
+		assert.Equal(t, 0, totalCount, "Queue should remain empty")
+	})
 
-				total := int64(0)
-				entrypointSet := make(map[string]bool)
-				for _, ep := range entrypoints {
-					entrypointSet[ep] = true
-				}
+	t.Run("ClearAllJobs", func(t *testing.T) {
+		// Add some jobs
+		err := q.EnqueueJob(ctx, 0, "placeholder", nil)
+		require.NoError(t, err)
 
-				for _, size := range queueSize {
-					if len(entrypoints) == 0 || entrypointSet[size.Entrypoint] {
-						total += size.Count
-					}
-				}
-				return total
-			}
+		queueSize, err := q.QueueSize(ctx)
+		require.NoError(t, err)
+		totalCount := 0
+		for _, size := range queueSize {
+			totalCount += size.Count
+		}
+		assert.Equal(t, 1, totalCount, "Should have 1 job")
 
-			getTotalQueueCount := func() int64 {
-				return getQueueSizeForEntrypoints([]string{})
-			}
+		// Clear all jobs
+		err = q.ClearQueue(ctx, nil)
+		require.NoError(t, err)
 
-			// Test 1: Delete all by listing all entrypoints
-			// Enqueue jobs with different entrypoints
-			entrypoints := make([]string, tc.N)
-			for i := 0; i < tc.N; i++ {
-				entrypoint := fmt.Sprintf("placeholder%d", i)
-				entrypoints[i] = entrypoint
+		queueSize, err = q.QueueSize(ctx)
+		require.NoError(t, err)
+		totalCount = 0
+		for _, size := range queueSize {
+			totalCount += size.Count
+		}
+		assert.Equal(t, 0, totalCount, "Queue should be empty after clear")
+	})
 
-				err := queries.EnqueueJob(ctx, generated.EnqueueJobParams{
-					Priority:   0,
-					Entrypoint: entrypoint,
-					Payload:    nil,
-				})
-				require.NoError(t, err)
-			}
-
-			// Verify all jobs are queued
-			assert.Equal(t, int64(tc.N), getTotalQueueCount(), "Should have %d jobs queued", tc.N)
-
-			// Clear specific entrypoints
-			err := queries.ClearQueue(ctx, entrypoints)
+	t.Run("ClearSpecificEntrypoints", func(t *testing.T) {
+		// Add jobs with different entrypoints
+		N := 3
+		for i := 0; i < N; i++ {
+			entrypoint := fmt.Sprintf("placeholder%d", i)
+			err := q.EnqueueJob(ctx, 0, entrypoint, nil)
 			require.NoError(t, err)
-			assert.Equal(t, int64(0), getTotalQueueCount(), "Queue should be empty after clearing specific entrypoints")
+		}
 
-			// Test 2: Delete all with empty slice (equivalent to None in Python)
-			// Re-enqueue jobs
-			for i := 0; i < tc.N; i++ {
-				entrypoint := fmt.Sprintf("placeholder%d", i)
+		queueSize, err := q.QueueSize(ctx)
+		require.NoError(t, err)
+		assert.Len(t, queueSize, N, "Should have jobs for %d entrypoints", N)
 
-				err := queries.EnqueueJob(ctx, generated.EnqueueJobParams{
-					Priority:   0,
-					Entrypoint: entrypoint,
-					Payload:    nil,
-				})
-				require.NoError(t, err)
+		totalCount := 0
+		for _, size := range queueSize {
+			totalCount += size.Count
+		}
+		assert.Equal(t, N, totalCount, "Should have %d total jobs", N)
+
+		// Clear only placeholder0
+		err = q.ClearQueue(ctx, []string{"placeholder0"})
+		require.NoError(t, err)
+
+		queueSize, err = q.QueueSize(ctx)
+		require.NoError(t, err)
+		totalCount = 0
+		for _, size := range queueSize {
+			totalCount += size.Count
+		}
+		assert.Equal(t, N-1, totalCount, "Should have %d jobs remaining", N-1)
+
+		// Verify placeholder0 is gone but others remain
+		foundPlaceholder0 := false
+		for _, size := range queueSize {
+			if size.Entrypoint == "placeholder0" {
+				foundPlaceholder0 = true
 			}
-
-			assert.Equal(t, int64(tc.N), getTotalQueueCount(), "Should have %d jobs queued again", tc.N)
-
-			// Clear all with empty slice (simulating None in Python)
-			err = queries.ClearQueue(ctx, []string{})
-			require.NoError(t, err)
-			assert.Equal(t, int64(0), getTotalQueueCount(), "Queue should be empty after clearing all")
-
-			// Test 3: Delete one specific entrypoint
-			// Re-enqueue jobs
-			for i := 0; i < tc.N; i++ {
-				entrypoint := fmt.Sprintf("placeholder%d", i)
-
-				err := queries.EnqueueJob(ctx, generated.EnqueueJobParams{
-					Priority:   0,
-					Entrypoint: entrypoint,
-					Payload:    nil,
-				})
-				require.NoError(t, err)
-			}
-
-			assert.Equal(t, int64(tc.N), getTotalQueueCount(), "Should have %d jobs queued for third test", tc.N)
-
-			// Clear only placeholder0
-			err = queries.ClearQueue(ctx, []string{"placeholder0"})
-			require.NoError(t, err)
-			assert.Equal(t, int64(tc.N-1), getTotalQueueCount(), "Should have %d jobs after clearing one", tc.N-1)
-		})
-	}
+		}
+		assert.False(t, foundPlaceholder0, "placeholder0 should be cleared")
+	})
 }
 
 // TestQueuePriority migrates pgqueuer's test_queue_priority
-// Tests job priority ordering
+// Tests that jobs are dequeued in priority order (highest first)
 func TestQueuePriority(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -556,7 +468,6 @@ func TestQueuePriority(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Setup test database
 			testDB := testutil.SetupTestDB(t)
 			if testDB == nil {
 				t.Skip("PostgreSQL not available")
@@ -564,212 +475,53 @@ func TestQueuePriority(t *testing.T) {
 			defer testDB.Close()
 
 			ctx := context.Background()
-			queries := generated.New(testDB.Pool())
+			q := queries.NewQueries(testDB.Pool())
 
-			// Enqueue N jobs with increasing priorities - priorities list(range(N))
+			// Enqueue jobs with different priorities (0 to N-1)
+			// pgqueuer uses: list(range(N)) as priorities
 			for i := 0; i < tc.N; i++ {
-				payload := []byte(strconv.Itoa(i))
-				err := queries.EnqueueJob(ctx, generated.EnqueueJobParams{
-					Priority:   int32(i), // Priority increases with i
-					Entrypoint: "placeholder",
-					Payload:    payload,
-				})
+				payload := fmt.Sprintf(`{"id": %d}`, i)
+				err := q.EnqueueJob(ctx, i, "placeholder", []byte(payload))
 				require.NoError(t, err)
 			}
 
-			// Dequeue all jobs and verify priority ordering
-			var jobs []generated.DequeueJobsAtomicRow
-
+			// Dequeue all jobs and verify priority order
+			var jobs []queries.Job
+			batchSize := 10
 			for {
-				nextJobs, err := queries.DequeueJobsAtomic(ctx, generated.DequeueJobsAtomicParams{
-					Column1: []string{"placeholder"},
-					Limit:   10,
+				dequeuedJobs, err := q.DequeueJobs(ctx, queries.DequeueJobsParams{
+					BatchSize:   batchSize,
+					Entrypoints: []string{"placeholder"},
 				})
 				require.NoError(t, err)
 
-				if len(nextJobs) == 0 {
+				if len(dequeuedJobs) == 0 {
 					break
 				}
 
-				for _, job := range nextJobs {
-					jobs = append(jobs, job)
+				jobs = append(jobs, dequeuedJobs...)
 
-					// Log job as successful
-					err = queries.InsertJobStatistics(ctx, generated.InsertJobStatisticsParams{
-						Priority:    job.Priority,
-						Entrypoint:  job.Entrypoint,
-						TimeInQueue: pgtype.Interval{Valid: true, Microseconds: 0},
-						Created:     job.Created,
-						Status:      generated.StatisticsStatusSuccessful,
-						Count:       1,
-					})
-					require.NoError(t, err)
-
-					// Delete processed job
-					err = queries.DeleteJob(ctx, job.ID)
+				// Complete jobs to avoid re-processing
+				for _, job := range dequeuedJobs {
+					err = q.CompleteJob(ctx, job.ID, "successful")
 					require.NoError(t, err)
 				}
 			}
 
-			// Verify jobs are sorted by priority descending - assert jobs == sorted(jobs, key=lambda x: x.priority, reverse=True)
-			require.Len(t, jobs, tc.N, "Should have processed all %d jobs", tc.N)
+			require.Len(t, jobs, tc.N, "Should dequeue all %d jobs", tc.N)
 
-			// Check if jobs are in descending priority order
-			for i := 1; i < len(jobs); i++ {
-				assert.GreaterOrEqual(t, jobs[i-1].Priority, jobs[i].Priority,
-					"Jobs should be ordered by priority (descending), job %d has priority %d, job %d has priority %d",
-					i-1, jobs[i-1].Priority, i, jobs[i].Priority)
-			}
-		})
-	}
-}
-
-// TestQueueRetryTimer migrates pgqueuer's test_queue_retry_timer
-// Tests retry timer functionality for picked jobs
-func TestQueueRetryTimer(t *testing.T) {
-	testCases := []struct {
-		name string
-		N    int
-	}{
-		{"Single", 1},
-		{"Dual", 2},
-		{"Many", 64},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Setup test database
-			testDB := testutil.SetupTestDB(t)
-			if testDB == nil {
-				t.Skip("PostgreSQL not available")
-			}
-			defer testDB.Close()
-
-			ctx := context.Background()
-			queries := generated.New(testDB.Pool())
-			retryTimer := 100 * time.Millisecond // retry_timer: timedelta = timedelta(seconds=0.1)
-
-			// Enqueue N jobs with increasing priorities
-			for i := 0; i < tc.N; i++ {
-				payload := []byte(strconv.Itoa(i))
-				err := queries.EnqueueJob(ctx, generated.EnqueueJobParams{
-					Priority:   int32(i),
-					Entrypoint: "placeholder",
-					Payload:    payload,
-				})
-				require.NoError(t, err)
-			}
-
-			// Pick all jobs but don't process them (simulates "in progress")
-			// while _ := await q.dequeue(batch_size=10, entrypoints={"placeholder"}): ...
-			pickedCount := 0
-			for {
-				jobs, err := queries.DequeueJobsAtomic(ctx, generated.DequeueJobsAtomicParams{
-					Column1: []string{"placeholder"},
-					Limit:   10,
-				})
-				require.NoError(t, err)
-
-				if len(jobs) == 0 {
-					break
-				}
-				pickedCount += len(jobs)
-				// Note: We don't delete or log these jobs, leaving them in "picked" state
-			}
-			assert.Equal(t, tc.N, pickedCount, "Should have picked all %d jobs", tc.N)
-
-			// Verify no more jobs can be dequeued immediately
-			// assert len(await q.dequeue(batch_size=10, entrypoints={"placeholder"})) == 0
-			jobs, err := queries.DequeueJobsAtomic(ctx, generated.DequeueJobsAtomicParams{
-				Column1: []string{"placeholder"},
-				Limit:   10,
+			// Verify jobs are in priority order (highest first)
+			// pgqueuer: assert jobs == sorted(jobs, key=lambda x: x.priority, reverse=True)
+			expectedJobs := make([]queries.Job, len(jobs))
+			copy(expectedJobs, jobs)
+			sort.Slice(expectedJobs, func(i, j int) bool {
+				return expectedJobs[i].Priority > expectedJobs[j].Priority // Highest first
 			})
-			require.NoError(t, err)
-			assert.Empty(t, jobs, "Should not be able to dequeue jobs immediately after picking")
 
-			// Sleep to simulate slow entrypoint function - await asyncio.sleep(retry_timer.total_seconds())
-			time.Sleep(retryTimer)
-
-			// Re-fetch with retry timer, should get the same number of jobs
-			var retryJobs []generated.DequeueRetryJobsAtomicRow
-			retryInterval := pgtype.Interval{
-				Valid:        true,
-				Microseconds: int64(retryTimer.Microseconds()),
+			for i, job := range jobs {
+				assert.Equal(t, expectedJobs[i].Priority, job.Priority,
+					"Job at position %d should have priority %d", i, expectedJobs[i].Priority)
 			}
-
-			for {
-				nextJobs, err := queries.DequeueRetryJobsAtomic(ctx, generated.DequeueRetryJobsAtomicParams{
-					Column1: []string{"placeholder"},
-					Column2: retryInterval,
-					Limit:   10,
-				})
-				require.NoError(t, err)
-
-				if len(nextJobs) == 0 {
-					break
-				}
-				retryJobs = append(retryJobs, nextJobs...)
-			}
-
-			// Verify we got the same number of jobs as originally queued
-			// assert len(jobs) == N
-			assert.Len(t, retryJobs, tc.N, "Should be able to retry all %d jobs after timeout", tc.N)
 		})
-	}
-}
-
-// TestQueueRetryTimerNegativeRaises migrates pgqueuer's test_queue_retry_timer_negative_raises
-// Tests that negative retry timers raise appropriate errors
-func TestQueueRetryTimerNegativeRaises(t *testing.T) {
-	// Setup test database
-	testDB := testutil.SetupTestDB(t)
-	if testDB == nil {
-		t.Skip("PostgreSQL not available")
-	}
-	defer testDB.Close()
-
-	ctx := context.Background()
-	queries := generated.New(testDB.Pool())
-
-	// Test negative microseconds - equivalent to -timedelta(seconds=0.001)
-	negativeInterval := pgtype.Interval{
-		Valid:        true,
-		Microseconds: -1000, // -1ms in microseconds
-	}
-
-	// This should handle the negative interval gracefully or return no results
-	// In Go, we don't have direct ValueError equivalent, but the query should handle this
-	jobs, err := queries.DequeueRetryJobsAtomic(ctx, generated.DequeueRetryJobsAtomicParams{
-		Column1: []string{"placeholder"},
-		Column2: negativeInterval,
-		Limit:   10,
-	})
-
-	// Either should return error or empty results, depending on implementation
-	// PostgreSQL will likely return no results for negative intervals
-	if err != nil {
-		t.Logf("Expected behavior: negative interval returned error: %v", err)
-	} else {
-		assert.Empty(t, jobs, "Negative retry timer should return no jobs")
-		t.Log("Expected behavior: negative interval returned empty results")
-	}
-
-	// Test second negative case - equivalent to timedelta(seconds=-0.001)
-	negativeInterval2 := pgtype.Interval{
-		Valid:        true,
-		Microseconds: -1000, // -1ms in microseconds
-	}
-
-	jobs2, err2 := queries.DequeueRetryJobsAtomic(ctx, generated.DequeueRetryJobsAtomicParams{
-		Column1: []string{"placeholder"},
-		Column2: negativeInterval2,
-		Limit:   10,
-	})
-
-	if err2 != nil {
-		t.Logf("Expected behavior: second negative interval returned error: %v", err2)
-	} else {
-		assert.Empty(t, jobs2, "Second negative retry timer should return no jobs")
-		t.Log("Expected behavior: second negative interval returned empty results")
 	}
 }

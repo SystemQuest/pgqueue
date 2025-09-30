@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/systemquest/pgqueue4go/pkg/db/generated"
 	"github.com/systemquest/pgqueue4go/pkg/listener"
 )
 
@@ -177,13 +175,8 @@ func (qm *QueueManager) Run(ctx context.Context, opts *RunOptions) error {
 		opts = DefaultRunOptions()
 	}
 
-	// Check schema version for compatibility (pgqueuer alignment)
-	version, err := qm.GetSchemaVersion(ctx)
-	if err != nil {
-		qm.logger.Warn("Could not retrieve schema version", "error", err)
-	} else {
-		qm.logger.Info("Schema version", "version", version)
-	}
+	// Schema version checking no longer needed with new architecture
+	qm.logger.Info("Using new Queries API architecture")
 
 	// Check for updated column (pgqueuer compatibility)
 	hasUpdated, err := qm.HasUpdatedColumn(ctx)
@@ -311,7 +304,10 @@ func (qm *QueueManager) processJob(ctx context.Context, workerID int, job *Job) 
 
 	if !exists {
 		logger.Error("Entrypoint not found", "entrypoint", job.Entrypoint)
-		qm.logJobResult(ctx, job, "exception")
+		// Complete job with exception status
+		if err := qm.db.Queries().CompleteJob(ctx, int(job.ID), "exception"); err != nil {
+			logger.Error("Failed to complete job with exception", "error", err)
+		}
 		return
 	}
 
@@ -319,11 +315,7 @@ func (qm *QueueManager) processJob(ctx context.Context, workerID int, job *Job) 
 	jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute) // Default job timeout
 	defer cancel()
 
-	// Update job status to 'picked'
-	if err := qm.updateJobStatus(ctx, job.ID, JobStatusPicked); err != nil {
-		logger.Error("Failed to update job status to picked", "error", err)
-		return
-	}
+	// Job is already picked by DequeueJobs, so we can execute it directly
 	job.Status = JobStatusPicked
 
 	var jobErr error
@@ -338,64 +330,27 @@ func (qm *QueueManager) processJob(ctx context.Context, workerID int, job *Job) 
 		jobErr = fn(jobCtx, job)
 	}()
 
-	// Log job result and clean up
+	// Complete the job (this handles both cleanup and statistics logging)
+	var status string
 	if jobErr != nil {
 		logger.Error("Job execution failed", "error", jobErr)
-		qm.logJobResult(ctx, job, "exception")
+		status = "exception"
 	} else {
 		logger.Debug("Job executed successfully")
-		qm.logJobResult(ctx, job, "successful")
+		status = "successful"
 	}
 
-	// Delete the completed job
-	if err := qm.db.Queries().DeleteJob(ctx, job.ID); err != nil {
+	// Use CompleteJob which handles both deletion and statistics
+	if err := qm.db.Queries().CompleteJob(ctx, int(job.ID), status); err != nil {
 		logger.Error("Failed to delete completed job", "error", err)
 	}
 }
 
-// updateJobStatus updates the status of a job
-func (qm *QueueManager) updateJobStatus(ctx context.Context, jobID int32, status JobStatus) error {
-	return qm.db.Queries().UpdateJobStatus(ctx, generated.UpdateJobStatusParams{
-		ID:     jobID,
-		Status: generated.QueueStatus(status),
-	})
-}
-
-// logJobResult logs the execution result for statistics
-func (qm *QueueManager) logJobResult(ctx context.Context, job *Job, status string) {
-	// Calculate time in queue
-	timeInQueue := time.Since(job.Created)
-
-	// Convert time.Duration to pgtype.Interval
-	var interval pgtype.Interval
-	interval.Microseconds = int64(timeInQueue.Microseconds())
-	interval.Valid = true
-
-	// Get current time as pgtype.Timestamptz
-	var created pgtype.Timestamptz
-	created.Time = time.Now()
-	created.Valid = true
-
-	params := generated.InsertJobStatisticsParams{
-		Priority:    job.Priority,
-		TimeInQueue: interval,
-		Entrypoint:  job.Entrypoint,
-		Created:     created,
-		Status:      generated.StatisticsStatus(status),
-		Count:       1, // Single job processed
-	}
-
-	if err := qm.db.Queries().InsertJobStatistics(ctx, params); err != nil {
-		qm.logger.Error("Failed to log job result", "error", err, "job_id", job.ID)
-	}
-}
+// Note: updateJobStatus and logJobResult are no longer needed
+// as the new Queries API handles status updates and statistics automatically via CompleteJob
 
 // ClearQueue removes all jobs for specified entrypoints
 func (qm *QueueManager) ClearQueue(ctx context.Context, entrypoints []string) error {
-	if len(entrypoints) == 0 {
-		return fmt.Errorf("no entrypoints specified")
-	}
-
 	err := qm.db.Queries().ClearQueue(ctx, entrypoints)
 	if err != nil {
 		return fmt.Errorf("failed to clear queue: %w", err)
@@ -405,23 +360,5 @@ func (qm *QueueManager) ClearQueue(ctx context.Context, entrypoints []string) er
 	return nil
 }
 
-// GetJob retrieves a specific job by ID
-func (qm *QueueManager) GetJob(ctx context.Context, jobID int32) (*Job, error) {
-	pgJob, err := qm.db.Queries().GetJob(ctx, jobID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get job: %w", err)
-	}
-
-	return qm.convertPgJob(pgJob)
-}
-
-// DeleteJob removes a specific job from the queue
-func (qm *QueueManager) DeleteJob(ctx context.Context, jobID int32) error {
-	err := qm.db.Queries().DeleteJob(ctx, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to delete job: %w", err)
-	}
-
-	qm.logger.Debug("Deleted job", "job_id", jobID)
-	return nil
-}
+// Note: GetJob and DeleteJob are no longer needed as the new architecture
+// handles job lifecycle automatically through CompleteJob

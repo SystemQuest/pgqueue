@@ -9,8 +9,16 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres <<-EOSQL
     CREATE DATABASE testdb;
 EOSQL
 
-# Install schema from migration file (single source of truth)
-echo "Installing schema from migration file..."
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname testdb -f /migrations/001_initial_schema.up.sql
+# Install schema using pgqueue4go CLI (PgQueuer-aligned approach)
+echo "Installing schema using pgqueue4go CLI..."
 
-echo "Test database ready with schema installed!"
+# Simple sleep to ensure PostgreSQL is ready (init scripts run after PostgreSQL is up)
+sleep 2
+
+# In Docker container, use Unix socket connection
+DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@/testdb?host=/var/run/postgresql&sslmode=disable"
+
+# Use the CLI to install the schema - this is the single source of truth for schema
+pgqueue4go install --database-url "$DATABASE_URL" --verbose
+
+echo "Test database ready with schema installed via CLI!"

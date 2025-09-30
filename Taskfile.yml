@@ -37,37 +37,16 @@ tasks:
     cmds:
       - sleep 2  # Wait for container to be ready
 
-  generate:
-    desc: Generate sqlc code
-    cmds:
-      - sqlc generate
-
-  migrate:up:
-    desc: Run database migrations
-    cmds:
-      - migrate -path sql/migrations -database "{{.POSTGRES_URL}}" up
-
-  migrate:down:
-    desc: Rollback database migrations
-    cmds:
-      - migrate -path sql/migrations -database "{{.POSTGRES_URL}}" down
-
-  migrate:create:
-    desc: Create new migration (usage: task migrate:create -- migration_name)
-    cmds:
-      - migrate create -ext sql -dir sql/migrations -seq {{.CLI_ARGS}}
-
   test:
     desc: Run tests
-    deps: [generate]
     cmds:
       - go test -v ./...
 
   test:integration:
     desc: Run integration tests
-    deps: [db:reset, migrate:up, generate]
+    deps: [db:reset]
     cmds:
-      - sleep 2  # Wait for migrations
+      - sleep 2  # Wait for database
       - go test -v ./... -tags=integration
 
   build:
@@ -84,7 +63,6 @@ tasks:
     desc: Clean build artifacts
     cmds:
       - rm -rf bin/
-      - rm -rf pkg/db/generated/
 
   lint:
     desc: Run linter
