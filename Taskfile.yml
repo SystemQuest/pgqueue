@@ -1,0 +1,104 @@
+version: '3'
+
+# Global variables
+vars:
+  POSTGRES_URL: postgres://postgres:password@localhost:5432/pgqueue_test?sslmode=disable
+
+# Task definitions
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  dev:
+    desc: Start development environment
+    deps: [db:start]
+    cmds:
+      - echo "Development environment ready"
+      - echo "Database URL: {{.POSTGRES_URL}}"
+
+  db:start:
+    desc: Start PostgreSQL with Docker
+    cmds:
+      - docker run -d --name pgqueue-postgres -p 5432:5432 -e POSTGRES_PASSWORD=password -e POSTGRES_DB=pgqueue_test postgres:15-alpine
+    status:
+      - docker ps --filter name=pgqueue-postgres --filter status=running --quiet
+
+  db:stop:
+    desc: Stop PostgreSQL container
+    cmds:
+      - docker stop pgqueue-postgres || true
+      - docker rm pgqueue-postgres || true
+
+  db:reset:
+    desc: Reset database
+    deps: [db:stop, db:start]
+    cmds:
+      - sleep 2  # Wait for container to be ready
+
+  generate:
+    desc: Generate sqlc code
+    cmds:
+      - sqlc generate
+
+  migrate:up:
+    desc: Run database migrations
+    cmds:
+      - migrate -path sql/migrations -database "{{.POSTGRES_URL}}" up
+
+  migrate:down:
+    desc: Rollback database migrations
+    cmds:
+      - migrate -path sql/migrations -database "{{.POSTGRES_URL}}" down
+
+  migrate:create:
+    desc: Create new migration (usage: task migrate:create -- migration_name)
+    cmds:
+      - migrate create -ext sql -dir sql/migrations -seq {{.CLI_ARGS}}
+
+  test:
+    desc: Run tests
+    deps: [generate]
+    cmds:
+      - go test -v ./...
+
+  test:integration:
+    desc: Run integration tests
+    deps: [db:reset, migrate:up, generate]
+    cmds:
+      - sleep 2  # Wait for migrations
+      - go test -v ./... -tags=integration
+
+  build:
+    desc: Build CLI tool
+    cmds:
+      - go build -o bin/pgqueue ./cmd/pgqueue
+
+  install:
+    desc: Install CLI tool
+    cmds:
+      - go install ./cmd/pgqueue
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf bin/
+      - rm -rf pkg/db/generated/
+
+  lint:
+    desc: Run linter
+    cmds:
+      - golangci-lint run
+
+  fmt:
+    desc: Format code
+    cmds:
+      - go fmt ./...
+      - goimports -w .
+
+  deps:
+    desc: Download dependencies
+    cmds:
+      - go mod download
+      - go mod tidy
