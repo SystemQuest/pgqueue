@@ -94,7 +94,14 @@ GROUP BY entrypoint, priority, status
 ORDER BY count DESC, entrypoint, priority, status;
 
 -- name: ClearQueue :exec
-DELETE FROM pgqueue_jobs WHERE entrypoint = ANY($1::text[]);
+DELETE FROM pgqueue_jobs 
+WHERE (
+    CASE 
+        WHEN array_length($1::text[], 1) IS NULL OR array_length($1::text[], 1) = 0 
+        THEN TRUE 
+        ELSE entrypoint = ANY($1::text[])
+    END
+);
 
 -- name: TruncateQueue :exec
 TRUNCATE pgqueue_jobs;

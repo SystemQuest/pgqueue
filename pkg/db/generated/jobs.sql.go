@@ -12,7 +12,14 @@ import (
 )
 
 const clearQueue = `-- name: ClearQueue :exec
-DELETE FROM pgqueue_jobs WHERE entrypoint = ANY($1::text[])
+DELETE FROM pgqueue_jobs 
+WHERE (
+    CASE 
+        WHEN array_length($1::text[], 1) IS NULL OR array_length($1::text[], 1) = 0 
+        THEN TRUE 
+        ELSE entrypoint = ANY($1::text[])
+    END
+)
 `
 
 func (q *Queries) ClearQueue(ctx context.Context, dollar_1 []string) error {
