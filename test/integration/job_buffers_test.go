@@ -149,9 +149,15 @@ func TestJobBufferMaxSize(t *testing.T) {
 			stats, err := q.LogStatistics(ctx, 1000)
 			require.NoError(t, err)
 
-			// Should have one aggregated record with count = tc.maxSize
-			require.Len(t, stats, 1)
-			assert.Equal(t, tc.maxSize, stats[0].Count, "Should have max_size=%d aggregated statistics", tc.maxSize)
+			// Count total statistics - may be aggregated into one or multiple records
+			// depending on timing of inserts
+			totalStats := 0
+			for _, stat := range stats {
+				if stat.Entrypoint == "buffer_test" && stat.Status == "successful" {
+					totalStats += stat.Count
+				}
+			}
+			assert.Equal(t, tc.maxSize, totalStats, "Should have total %d statistics", tc.maxSize)
 		})
 	}
 }

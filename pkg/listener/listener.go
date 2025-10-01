@@ -16,15 +16,19 @@ type EventHandler func(*Event) error
 
 // Listener manages PostgreSQL LISTEN/NOTIFY connections and event routing
 type Listener struct {
-	pool     *pgxpool.Pool
-	logger   *slog.Logger
-	channel  string
-	handlers map[string][]EventHandler
-	mu       sync.RWMutex
-	conn     *pgx.Conn
-	connMu   sync.Mutex
-	closed   bool
-	closeCh  chan struct{}
+	pool         *pgxpool.Pool
+	logger       *slog.Logger
+	channel      string
+	handlers     map[string][]EventHandler
+	mu           sync.RWMutex
+	conn         *pgx.Conn
+	poolConn     *pgxpool.Conn // Keep reference to release back to pool
+	connMu       sync.Mutex
+	closed       bool
+	closeCh      chan struct{}
+	eventCh      chan *Event // Event queue for async dispatch (Phase 2)
+	eventChSize  int         // Size of event queue buffer
+	reconnecting bool        // Track reconnection state
 }
 
 // NewListener creates a new PostgreSQL event listener
@@ -33,12 +37,17 @@ func NewListener(pool *pgxpool.Pool, channel string, logger *slog.Logger) *Liste
 		logger = slog.Default()
 	}
 
+	// Phase 2: Add event queue with buffer size 100
+	eventChSize := 100
+
 	return &Listener{
-		pool:     pool,
-		logger:   logger,
-		channel:  channel,
-		handlers: make(map[string][]EventHandler),
-		closeCh:  make(chan struct{}),
+		pool:        pool,
+		logger:      logger,
+		channel:     channel,
+		handlers:    make(map[string][]EventHandler),
+		closeCh:     make(chan struct{}),
+		eventCh:     make(chan *Event, eventChSize),
+		eventChSize: eventChSize,
 	}
 }
 
@@ -77,6 +86,9 @@ func (l *Listener) Start(ctx context.Context) error {
 
 	l.logger.Info("Listening on PostgreSQL channel", "channel", l.channel)
 
+	// Phase 2: Start event dispatcher goroutine
+	go l.eventDispatcher(ctx)
+
 	// Start the event loop
 	go l.eventLoop(ctx)
 
@@ -96,16 +108,17 @@ func (l *Listener) Stop(ctx context.Context) error {
 	close(l.closeCh)
 
 	if l.conn != nil {
-		// Unlisten from the channel
+		// Unlisten from the channel (best effort)
 		if _, err := l.conn.Exec(ctx, "UNLISTEN "+l.channel); err != nil {
 			l.logger.Warn("Failed to unlisten from channel", "channel", l.channel, "error", err)
 		}
-
-		// Close the connection
-		if err := l.conn.Close(ctx); err != nil {
-			l.logger.Warn("Failed to close listener connection", "error", err)
-		}
 		l.conn = nil
+	}
+
+	// Release connection back to pool - this is critical!
+	if l.poolConn != nil {
+		l.poolConn.Release()
+		l.poolConn = nil
 	}
 
 	l.logger.Info("PostgreSQL event listener stopped", "channel", l.channel)
@@ -126,47 +139,79 @@ func (l *Listener) connect(ctx context.Context) error {
 		return fmt.Errorf("failed to acquire connection from pool: %w", err)
 	}
 
-	// Use the underlying connection for listening
+	// Save both the pool connection and underlying connection
+	// We need poolConn to release back to pool later
+	l.poolConn = conn
 	l.conn = conn.Conn()
-
-	// Don't release the connection back to the pool - we need it for listening
-	// conn.Release() // Don't call this
 
 	return nil
 }
 
-// reconnect attempts to reconnect after a connection failure
+// reconnect attempts to reconnect after a connection failure with exponential backoff
 func (l *Listener) reconnect(ctx context.Context) error {
-	l.logger.Warn("Attempting to reconnect listener")
+	l.connMu.Lock()
+	if l.reconnecting {
+		l.connMu.Unlock()
+		return fmt.Errorf("reconnection already in progress")
+	}
+	l.reconnecting = true
+	l.connMu.Unlock()
 
+	defer func() {
+		l.connMu.Lock()
+		l.reconnecting = false
+		l.connMu.Unlock()
+	}()
+
+	l.logger.Warn("Starting reconnection with exponential backoff")
+
+	// Release old connection
 	l.connMu.Lock()
 	if l.conn != nil {
-		l.conn.Close(ctx)
 		l.conn = nil
+	}
+	if l.poolConn != nil {
+		l.poolConn.Release()
+		l.poolConn = nil
 	}
 	l.connMu.Unlock()
 
-	// Wait a bit before reconnecting
-	select {
-	case <-time.After(1 * time.Second):
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-l.closeCh:
-		return fmt.Errorf("listener is closed")
+	// Phase 2: Exponential backoff retry logic
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+	maxAttempts := 5
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		l.logger.Info("Reconnection attempt", "attempt", attempt, "max_attempts", maxAttempts, "backoff", backoff)
+
+		// Wait with backoff
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return fmt.Errorf("reconnection cancelled: %w", ctx.Err())
+		case <-l.closeCh:
+			return fmt.Errorf("listener is closed")
+		}
+
+		// Attempt to connect
+		if err := l.connect(ctx); err != nil {
+			l.logger.Error("Reconnection failed", "attempt", attempt, "error", err)
+			backoff = min(backoff*2, maxBackoff)
+			continue
+		}
+
+		// Re-listen on the channel
+		if _, err := l.conn.Exec(ctx, "LISTEN "+l.channel); err != nil {
+			l.logger.Error("Re-listen failed", "attempt", attempt, "error", err)
+			backoff = min(backoff*2, maxBackoff)
+			continue
+		}
+
+		l.logger.Info("Successfully reconnected listener", "channel", l.channel, "attempts", attempt)
+		return nil
 	}
 
-	// Attempt to reconnect
-	if err := l.connect(ctx); err != nil {
-		return err
-	}
-
-	// Re-listen on the channel
-	if _, err := l.conn.Exec(ctx, "LISTEN "+l.channel); err != nil {
-		return fmt.Errorf("failed to re-listen on channel %s: %w", l.channel, err)
-	}
-
-	l.logger.Info("Successfully reconnected listener", "channel", l.channel)
-	return nil
+	return fmt.Errorf("failed to reconnect after %d attempts", maxAttempts)
 }
 
 // eventLoop is the main event processing loop
@@ -222,17 +267,65 @@ func (l *Listener) processNotifications(ctx context.Context) error {
 		"channel", notification.Channel,
 		"payload", notification.Payload)
 
-	// Parse the event
+	// Parse the event (Received timestamp set in ParseEvent)
 	event, err := ParseEvent(notification.Payload)
 	if err != nil {
 		l.logger.Error("Failed to parse event", "error", err, "payload", notification.Payload)
 		return nil // Continue processing other events
 	}
 
-	// Dispatch to handlers
-	l.dispatchEvent(event)
+	// Phase 2: Queue event for async dispatch
+	select {
+	case l.eventCh <- event:
+		l.logger.Debug("Event queued for dispatch", "operation", event.Operation, "queue_size", len(l.eventCh))
+	default:
+		// Event queue is full - dispatch synchronously as fallback
+		l.logger.Warn("Event queue full, dispatching synchronously", "queue_size", l.eventChSize)
+		l.dispatchEvent(event)
+	}
 
 	return nil
+}
+
+// eventDispatcher runs in a goroutine to dispatch events from the queue
+// Phase 2: Async event dispatch for better throughput
+func (l *Listener) eventDispatcher(ctx context.Context) {
+	l.logger.Debug("Event dispatcher started")
+	defer l.logger.Debug("Event dispatcher stopped")
+
+	for {
+		select {
+		case <-ctx.Done():
+			l.logger.Debug("Context cancelled, stopping event dispatcher")
+			// Drain remaining events
+			l.drainEventQueue()
+			return
+
+		case <-l.closeCh:
+			l.logger.Debug("Listener closed, stopping event dispatcher")
+			// Drain remaining events
+			l.drainEventQueue()
+			return
+
+		case event := <-l.eventCh:
+			l.dispatchEvent(event)
+		}
+	}
+}
+
+// drainEventQueue processes remaining events in the queue during shutdown
+func (l *Listener) drainEventQueue() {
+	l.logger.Debug("Draining event queue", "remaining", len(l.eventCh))
+
+	for {
+		select {
+		case event := <-l.eventCh:
+			l.dispatchEvent(event)
+		default:
+			l.logger.Debug("Event queue drained")
+			return
+		}
+	}
 }
 
 // dispatchEvent sends the event to all registered handlers

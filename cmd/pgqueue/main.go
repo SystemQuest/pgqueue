@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 	"github.com/systemquest/pgqueue4go/pkg/config"
 	"github.com/systemquest/pgqueue4go/pkg/db"
@@ -404,17 +405,39 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	// TODO: Implement dashboard display
-	logger.Info("Dashboard functionality coming soon...")
-	logger.Info("This will show real-time queue statistics")
-
-	if once {
-		return nil
+	// Create queries instance with prefix
+	var q *queries.Queries
+	if prefix != "" {
+		q = queries.NewQueriesWithPrefix(database.Pool(), prefix)
+	} else {
+		q = queries.NewQueries(database.Pool())
 	}
 
-	// Wait for cancellation
-	<-ctx.Done()
-	return nil
+	// Display dashboard once or in loop
+	if once {
+		return displayDashboard(ctx, q, logger)
+	}
+
+	// Refresh loop
+	refreshInterval := time.Duration(interval) * time.Second
+	ticker := time.NewTicker(refreshInterval)
+	defer ticker.Stop()
+
+	// Display immediately
+	if err := displayDashboard(ctx, q, logger); err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := displayDashboard(ctx, q, logger); err != nil {
+				logger.Error("Failed to display dashboard", "error", err)
+			}
+		}
+	}
 }
 
 func runListen(cmd *cobra.Command, args []string) error {
@@ -499,4 +522,75 @@ func runTest(cmd *cobra.Command, args []string) error {
 	logger.Info("This will test job creation, processing, and queue operations")
 
 	return nil
+}
+
+// displayDashboard fetches and displays queue statistics
+func displayDashboard(ctx context.Context, q *queries.Queries, logger *slog.Logger) error {
+	// Clear screen (ANSI escape code)
+	if !once {
+		fmt.Print("\033[H\033[2J")
+	}
+
+	// Fetch log statistics
+	stats, err := q.LogStatistics(ctx, tail)
+	if err != nil {
+		return fmt.Errorf("failed to fetch statistics: %w", err)
+	}
+
+	// Display header
+	fmt.Printf("PgQueue4Go Dashboard - %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Printf("Showing last %d entries\n\n", tail)
+
+	if len(stats) == 0 {
+		fmt.Println("No statistics available")
+		return nil
+	}
+
+	// Create table
+	table := tablewriter.NewWriter(os.Stdout)
+
+	// Set headers (matching PgQueuer: Created, Count, Entrypoint, Time in Queue, Status, Priority)
+	table.Header("Created", "Count", "Entrypoint", "Time in Queue", "Status", "Priority")
+
+	// Add rows
+	for _, stat := range stats {
+		created := stat.Created.Format("2006-01-02 15:04:05")
+		count := fmt.Sprintf("%d", stat.Count)
+		entrypoint := stat.Entrypoint
+		timeInQueue := formatDuration(stat.TimeInQueue)
+		status := stat.Status
+		priority := fmt.Sprintf("%d", stat.Priority)
+
+		if err := table.Append(created, count, entrypoint, timeInQueue, status, priority); err != nil {
+			return fmt.Errorf("failed to append row: %w", err)
+		}
+	}
+
+	// Render table
+	if err := table.Render(); err != nil {
+		return fmt.Errorf("failed to render table: %w", err)
+	}
+
+	// Show next refresh info
+	if !once && interval > 0 {
+		fmt.Printf("\nRefreshing every %d seconds. Press Ctrl+C to exit.\n", interval)
+	}
+
+	return nil
+} // formatDuration formats a duration in a human-readable way
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	if d < time.Hour {
+		minutes := int(d.Minutes())
+		seconds := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm%ds", minutes, seconds)
+	}
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh%dm", hours, minutes)
 }

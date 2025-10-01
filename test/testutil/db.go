@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -39,8 +38,18 @@ func TestDBConfig(database string) *config.DatabaseConfig {
 	}
 }
 
+// TB is an interface that matches both *testing.T and *testing.B
+type TB interface {
+	Name() string
+	Skip(...any)
+	Skipf(format string, args ...any)
+	Fatal(...any)
+	Fatalf(format string, args ...any)
+	Cleanup(func())
+}
+
 // SetupTestDB creates a temporary test database - exactly like pgqueuer's create_test_database
-func SetupTestDB(t *testing.T) *db.DB {
+func SetupTestDB(t TB) *db.DB {
 	// Generate unique database name
 	dbName := fmt.Sprintf("tmp_test_%s_%d",
 		strings.ReplaceAll(strings.ToLower(t.Name()), "/", "_"),

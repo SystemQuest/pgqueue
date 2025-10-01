@@ -45,8 +45,9 @@ func NewQueueManager(database *db.DB, logger *slog.Logger) *QueueManager {
 	// Initialize event listener
 	qm.listener = listener.NewListener(database.Pool(), qm.channel, logger)
 
-	// Initialize statistics buffer
-	qm.buffer = NewStatisticsBuffer(10, 100*time.Millisecond, qm.flushStatistics)
+	// Initialize statistics buffer with proper callback
+	// Similar to PgQueuer: JobBuffer(max_size=10, timeout=0.01s, flush_callback=queries.log_jobs)
+	qm.buffer = NewStatisticsBuffer(10, 100*time.Millisecond, qm.flushStatistics, logger)
 
 	return qm
 }
@@ -171,9 +172,34 @@ func (qm *QueueManager) DequeueJobsWithRetry(ctx context.Context, batchSize int3
 }
 
 // flushStatistics flushes buffered statistics to the database
-// This is now handled automatically by CompleteJob in the new Queries API
-func (qm *QueueManager) flushStatistics(ctx context.Context, stats []interface{}) error {
-	qm.logger.Debug("Statistics now handled automatically by CompleteJob")
+// This implements PgQueuer's queries.log_jobs functionality with batch aggregation
+func (qm *QueueManager) flushStatistics(ctx context.Context, completions []JobCompletion) error {
+	if len(completions) == 0 {
+		return nil
+	}
+
+	qm.logger.Debug("Flushing statistics", "count", len(completions))
+
+	// Convert to queries.JobStatus format
+	jobStatuses := make([]queries.JobStatus, len(completions))
+	for i, completion := range completions {
+		jobStatuses[i] = queries.JobStatus{
+			JobID:  int(completion.Job.ID),
+			Status: string(completion.Status),
+		}
+	}
+
+	// Batch log jobs to statistics table
+	// This aligns with PgQueuer's log_jobs which:
+	// 1. Deletes jobs from queue
+	// 2. Aggregates statistics
+	// 3. Uses ON CONFLICT to update counts
+	if err := qm.db.Queries().CompleteJobs(ctx, jobStatuses); err != nil {
+		qm.logger.Error("Failed to complete jobs", "error", err)
+		return fmt.Errorf("failed to complete jobs: %w", err)
+	}
+
+	qm.logger.Debug("Successfully flushed statistics", "count", len(completions))
 	return nil
 }
 
@@ -205,18 +231,43 @@ func (qm *QueueManager) IsAlive() bool {
 	return qm.alive
 }
 
-// Stop gracefully stops the queue manager
+// Stop immediately stops accepting new jobs
+// For graceful shutdown, use Shutdown() instead
 func (qm *QueueManager) Stop() {
 	qm.aliveMu.Lock()
-	defer qm.aliveMu.Unlock()
 	qm.alive = false
-
-	// Stop the statistics buffer
-	if qm.buffer != nil {
-		qm.buffer.Stop()
-	}
+	qm.aliveMu.Unlock()
 
 	qm.logger.Info("Queue manager stopped")
+}
+
+// Shutdown performs graceful shutdown of the queue manager
+// This waits for in-flight jobs to complete and flushes statistics buffer
+// Similar to PgQueuer's cleanup on context cancellation
+func (qm *QueueManager) Shutdown(ctx context.Context) error {
+	qm.logger.Info("Starting graceful shutdown")
+
+	// Stop accepting new jobs
+	qm.Stop()
+
+	// Stop the event listener first to prevent new job events
+	if qm.listener != nil {
+		if err := qm.listener.Stop(ctx); err != nil {
+			qm.logger.Warn("Error stopping listener", "error", err)
+		}
+	}
+
+	// Flush statistics buffer and wait for completion
+	// This aligns with PgQueuer's buffer.alive = False behavior
+	if qm.buffer != nil {
+		if err := qm.buffer.Stop(); err != nil {
+			qm.logger.Error("Error stopping statistics buffer", "error", err)
+			return fmt.Errorf("failed to stop statistics buffer: %w", err)
+		}
+	}
+
+	qm.logger.Info("Graceful shutdown completed")
+	return nil
 }
 
 // HasUpdatedColumn checks if the jobs table has the updated column (pgqueuer compatibility)

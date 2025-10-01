@@ -127,27 +127,33 @@ func (q *Queries) EnqueueJob(ctx context.Context, priority int, entrypoint strin
 	return err
 }
 
-// EnqueueJobs inserts multiple jobs into the queue in a single transaction
+// EnqueueJobs inserts multiple jobs into the queue in a single batch operation
+// This uses PostgreSQL's unnest() for efficient bulk insert, aligned with PgQueuer's approach
 func (q *Queries) EnqueueJobs(ctx context.Context, jobs []EnqueueJobParams) error {
 	if len(jobs) == 0 {
 		return nil
 	}
 
-	query := q.qb.CreateEnqueueBatchQuery()
+	// Extract arrays for unnest operation (like PgQueuer)
+	priorities := make([]int, len(jobs))
+	entrypoints := make([]string, len(jobs))
+	payloads := make([][]byte, len(jobs))
 
-	tx, err := q.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	for _, job := range jobs {
-		if _, err := tx.Exec(ctx, query, job.Priority, job.Entrypoint, job.Payload); err != nil {
-			return err
-		}
+	for i, job := range jobs {
+		priorities[i] = job.Priority
+		entrypoints[i] = job.Entrypoint
+		payloads[i] = job.Payload
 	}
 
-	return tx.Commit(ctx)
+	// Use unnest for efficient batch insert
+	// Aligned with PgQueuer: INSERT INTO ... VALUES (unnest($1::int[]), unnest($2::text[]), unnest($3::bytea[]), 'queued')
+	query := fmt.Sprintf(`
+		INSERT INTO %s (priority, entrypoint, payload, status)
+		SELECT unnest($1::int[]), unnest($2::text[]), unnest($3::bytea[]), 'queued'
+	`, q.qb.Settings.QueueTable)
+
+	_, err := q.db.Exec(ctx, query, priorities, entrypoints, payloads)
+	return err
 }
 
 // EnqueueJobParams represents parameters for enqueueing a job

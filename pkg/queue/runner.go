@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -165,6 +166,15 @@ func (qm *QueueManager) RunWithEvents(ctx context.Context, opts *RunOptions) err
 	close(workerPool)
 	wg.Wait()
 
+	// Perform graceful shutdown (flush buffer, close connections)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := qm.Shutdown(shutdownCtx); err != nil {
+		qm.logger.Error("Error during shutdown", "error", err)
+		return err
+	}
+
 	qm.logger.Info("Event-driven queue manager stopped")
 	return nil
 }
@@ -264,6 +274,15 @@ cleanup:
 	close(workerPool)
 	wg.Wait()
 
+	// Perform graceful shutdown (flush buffer, close connections)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := qm.Shutdown(shutdownCtx); err != nil {
+		qm.logger.Error("Error during shutdown", "error", err)
+		return err
+	}
+
 	qm.logger.Info("Queue manager stopped")
 	return nil
 }
@@ -297,6 +316,16 @@ func (qm *QueueManager) processJob(ctx context.Context, workerID int, job *Job) 
 
 	logger.Debug("Processing job")
 
+	// Dispatch job with proper error handling
+	// This aligns with PgQueuer's _dispatch method
+	qm.dispatchJob(ctx, job, logger)
+}
+
+// dispatchJob handles job dispatch with error handling and statistics buffering
+// This is aligned with PgQueuer's _dispatch method
+func (qm *QueueManager) dispatchJob(ctx context.Context, job *Job, logger *slog.Logger) {
+	logger.Debug("Dispatching job", "job_id", job.ID, "entrypoint", job.Entrypoint)
+
 	// Get the entrypoint function
 	qm.registryMu.RLock()
 	fn, exists := qm.registry[job.Entrypoint]
@@ -304,9 +333,12 @@ func (qm *QueueManager) processJob(ctx context.Context, workerID int, job *Job) 
 
 	if !exists {
 		logger.Error("Entrypoint not found", "entrypoint", job.Entrypoint)
-		// Complete job with exception status
-		if err := qm.db.Queries().CompleteJob(ctx, int(job.ID), "exception"); err != nil {
-			logger.Error("Failed to complete job with exception", "error", err)
+		// Add to buffer with exception status (like PgQueuer's buffer.add_job)
+		if err := qm.buffer.Add(JobCompletion{
+			Job:    job,
+			Status: StatisticsStatusException,
+		}); err != nil {
+			logger.Error("Failed to buffer job completion", "error", err)
 		}
 		return
 	}
@@ -315,14 +347,12 @@ func (qm *QueueManager) processJob(ctx context.Context, workerID int, job *Job) 
 	jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute) // Default job timeout
 	defer cancel()
 
-	// Job is already picked by DequeueJobs, so we can execute it directly
-	job.Status = JobStatusPicked
-
+	// Recover from panics (Go equivalent of Python's exception handling)
 	var jobErr error
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Error("Job panicked", "panic", r)
+				logger.Error("Job panicked", "job_id", job.ID, "panic", r)
 				jobErr = fmt.Errorf("job panicked: %v", r)
 			}
 		}()
@@ -330,19 +360,31 @@ func (qm *QueueManager) processJob(ctx context.Context, workerID int, job *Job) 
 		jobErr = fn(jobCtx, job)
 	}()
 
-	// Complete the job (this handles both cleanup and statistics logging)
-	var status string
+	// Determine status based on execution result
+	// Aligned with PgQueuer's try/except/else pattern
+	var status StatisticsStatus
 	if jobErr != nil {
-		logger.Error("Job execution failed", "error", jobErr)
-		status = "exception"
+		logger.Error("Job execution failed",
+			"job_id", job.ID,
+			"entrypoint", job.Entrypoint,
+			"error", jobErr)
+		status = StatisticsStatusException
 	} else {
-		logger.Debug("Job executed successfully")
-		status = "successful"
+		logger.Debug("Job executed successfully",
+			"job_id", job.ID,
+			"entrypoint", job.Entrypoint)
+		status = StatisticsStatusSuccessful
 	}
 
-	// Use CompleteJob which handles both deletion and statistics
-	if err := qm.db.Queries().CompleteJob(ctx, int(job.ID), status); err != nil {
-		logger.Error("Failed to delete completed job", "error", err)
+	// Add to buffer for batch processing (like PgQueuer's buffer.add_job)
+	// The buffer will flush to database when full or on timeout
+	if err := qm.buffer.Add(JobCompletion{
+		Job:    job,
+		Status: status,
+	}); err != nil {
+		logger.Error("Failed to buffer job completion",
+			"job_id", job.ID,
+			"error", err)
 	}
 }
 
