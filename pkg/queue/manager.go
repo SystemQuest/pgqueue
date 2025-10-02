@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/systemquest/pgqueue4go/pkg/db"
-	"github.com/systemquest/pgqueue4go/pkg/listener"
-	"github.com/systemquest/pgqueue4go/pkg/queries"
+	"github.com/systemquest/pgtask/pkg/db"
+	"github.com/systemquest/pgtask/pkg/listener"
+	"github.com/systemquest/pgtask/pkg/queries"
 )
 
 // EntrypointFunc represents a job processing function

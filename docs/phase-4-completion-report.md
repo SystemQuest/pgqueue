@@ -21,7 +21,7 @@ Phase 4 of PgQueue4Go has been successfully completed, implementing a comprehens
 
 #### Install Command
 ```bash
-pgqueue install --database-url "postgres://..." [--dry-run]
+pgtask install --database-url "postgres://..." [--dry-run]
 ```
 - Creates all database schema objects (types, tables, indexes, functions, triggers)
 - Dry-run mode to preview SQL
@@ -48,7 +48,7 @@ pgqueue health --database-url "postgres://..." [--verbose]
 
 #### Dashboard Command
 ```bash
-pgqueue dashboard --database-url "postgres://..." [--refresh 5] [--once]
+pgtask dashboard --database-url "postgres://..." [--refresh 5] [--once]
 ```
 - Real-time queue statistics
 - Job counts by status (queued/picked)
@@ -154,7 +154,7 @@ func (qb *QueryBuilder) CreateUninstallQuery() string
 
 ### Install/Uninstall Commands
 ```bash
-$ go run ./cmd/pgqueue install --dry-run --database-url "postgres://test"
+$ go run ./cmd/pgtask install --dry-run --database-url "postgres://test"
 ✅ SQL generation works correctly
 ✅ Dry-run mode displays formatted SQL
 ✅ Database URL masking for security

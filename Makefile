@@ -4,12 +4,12 @@
 .DEFAULT_GOAL := help
 
 # Variables
-BINARY_NAME := pgqueue4go
+BINARY_NAME := pgtask
 BUILD_DIR := bin
 
 ## Show available commands
 help:
-	@echo "PgQueue4Go - PostgreSQL Job Queue (aligned with pgqueuer)"
+	@echo "PgTask - PostgreSQL Task Queue (aligned with pgqueuer)"
 	@echo ""
 	@echo "Available commands:"
 	@echo "  test        - Run all tests (unit + integration)"
@@ -28,13 +28,13 @@ help:
 build:
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	@go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/pgqueue
+	@go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/pgtask
 
 ## Build Linux binary for Docker
 build-linux:
 	@echo "Building $(BINARY_NAME) for Linux..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux ./cmd/pgqueue
+	@GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux ./cmd/pgtask
 
 ## Start PostgreSQL test database (schema installed automatically via CLI)
 test-up: build-linux
@@ -42,7 +42,7 @@ test-up: build-linux
 	@docker-compose -f test/docker/docker-compose.test.yml up --force-recreate --build -d postgres
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 5
-	@echo "Test environment ready! (Schema installed using pgqueue4go CLI)"
+	@echo "Test environment ready! (Schema installed using pgtask CLI)"
 
 ## Run unit tests only (no database required)
 test-unit:

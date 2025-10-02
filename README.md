@@ -1,6 +1,6 @@
-# PgQueue4Go
+# PgTask
 
-A high-performance PostgreSQL-based job queue system for Go, inspired by PgQueuer.
+A high-performance PostgreSQL-based task/job queue system for Go, inspired by PgQueuer.
 
 ## Features
 
@@ -14,13 +14,13 @@ A high-performance PostgreSQL-based job queue system for Go, inspired by PgQueue
 
 ```bash
 # Install the CLI tool
-go install github.com/systemquest/pgqueue4go/cmd/pgqueue@latest
+go install github.com/systemquest/pgtask/cmd/pgqueue@latest
 
 # Setup database schema
-pgqueue install --database-url postgres://user:pass@localhost/dbname
+pgtask install --database-url postgres://user:pass@localhost/dbname
 
 # Start processing jobs
-pgqueue dashboard
+pgtask dashboard
 ```
 
 ## Usage
@@ -32,7 +32,7 @@ import (
     "context"
     "log"
     
-    "github.com/systemquest/pgqueue4go/pkg/queue"
+    "github.com/systemquest/pgtask/pkg/queue"
 )
 
 func main() {
@@ -70,21 +70,21 @@ Monitor your queue in real-time with the built-in dashboard:
 
 ```bash
 # Display dashboard with auto-refresh (every 5 seconds)
-pgqueue dashboard
+pgtask dashboard
 
 # Custom refresh interval (in seconds)
-pgqueue dashboard --interval 10
+pgtask dashboard --interval 10
 
 # Show last 50 entries
-pgqueue dashboard --tail 50
+pgtask dashboard --tail 50
 
 # Display once and exit
-pgqueue dashboard --once
+pgtask dashboard --once
 
 # Different table formats
-pgqueue dashboard --table-format pretty  # Default
-pgqueue dashboard --table-format simple
-pgqueue dashboard --table-format grid
+pgtask dashboard --table-format pretty  # Default
+pgtask dashboard --table-format simple
+pgtask dashboard --table-format grid
 ```
 
 **Example Output:**

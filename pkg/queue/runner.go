@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/systemquest/pgqueue4go/pkg/listener"
+	"github.com/systemquest/pgtask/pkg/listener"
 )
 
 // RunOptions contains configuration for running the queue manager
@@ -76,16 +76,15 @@ func (qm *QueueManager) RunWithEvents(ctx context.Context, opts *RunOptions) err
 			return err
 		}
 
-		// Send jobs to worker pool
+		// Send jobs to worker pool with blocking send
+		// This ensures all dequeued jobs are eventually processed
 		for _, job := range jobs {
 			select {
 			case workerPool <- job:
 				// Job sent to worker
+				qm.logger.Debug("Job sent to worker pool", "job_id", job.ID)
 			case <-ctx.Done():
 				return ctx.Err()
-			default:
-				// Worker pool is full, jobs will be processed later
-				qm.logger.Debug("Worker pool full, job will be processed later", "job_id", job.ID)
 			}
 		}
 

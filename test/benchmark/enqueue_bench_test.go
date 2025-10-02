@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/systemquest/pgqueue4go/pkg/queue"
-	"github.com/systemquest/pgqueue4go/test/testutil"
+	"github.com/systemquest/pgtask/pkg/queue"
+	"github.com/systemquest/pgtask/test/testutil"
 )
 
 // BenchmarkEnqueueSingle benchmarks single job enqueue

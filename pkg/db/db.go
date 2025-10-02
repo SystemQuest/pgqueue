@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/systemquest/pgqueue4go/pkg/config"
-	"github.com/systemquest/pgqueue4go/pkg/queries"
+	"github.com/systemquest/pgtask/pkg/config"
+	"github.com/systemquest/pgtask/pkg/queries"
 )
 
 // DB wraps the database connection pool and provides high-level operations

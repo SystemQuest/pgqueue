@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/systemquest/pgqueue4go/pkg/queries"
-	"github.com/systemquest/pgqueue4go/test/testutil"
+	"github.com/systemquest/pgtask/pkg/queries"
+	"github.com/systemquest/pgtask/test/testutil"
 )
 
 // perfCounterTime returns high-resolution timestamp similar to pgqueuer's _perf_counter_dt()

@@ -6,8 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/systemquest/pgqueue4go/pkg/queries"
-	"github.com/systemquest/pgqueue4go/test/testutil"
+	"github.com/systemquest/pgtask/pkg/queries"
+	"github.com/systemquest/pgtask/test/testutil"
 )
 
 // TestDashboardStatistics tests that the dashboard can fetch and display statistics

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/systemquest/pgqueue4go/pkg/config"
-	"github.com/systemquest/pgqueue4go/pkg/db"
-	"github.com/systemquest/pgqueue4go/pkg/queries"
+	"github.com/systemquest/pgtask/pkg/config"
+	"github.com/systemquest/pgtask/pkg/db"
+	"github.com/systemquest/pgtask/pkg/queries"
 )
 
 func main() {

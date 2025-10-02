@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/systemquest/pgqueue4go/pkg/queue"
-	"github.com/systemquest/pgqueue4go/test/testutil"
+	"github.com/systemquest/pgtask/pkg/queue"
+	"github.com/systemquest/pgtask/test/testutil"
 )
 
 // TestWorkerPanicRecovery tests that workers recover from panics

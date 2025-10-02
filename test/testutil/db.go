@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/systemquest/pgqueue4go/pkg/config"
-	"github.com/systemquest/pgqueue4go/pkg/db"
+	"github.com/systemquest/pgtask/pkg/config"
+	"github.com/systemquest/pgtask/pkg/db"
 )
 
 // DSN generates database connection string similar to pgqueuer's dsn()
