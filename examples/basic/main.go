@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/systemquest/pgtask/pkg/config"
-	"github.com/systemquest/pgtask/pkg/db"
-	"github.com/systemquest/pgtask/pkg/queue"
+	"github.com/systemquest/pgqueue/pkg/config"
+	"github.com/systemquest/pgqueue/pkg/db"
+	"github.com/systemquest/pgqueue/pkg/queue"
 )
 
 // TaskPayload represents a simple task payload

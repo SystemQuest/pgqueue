@@ -1,4 +1,4 @@
-module github.com/systemquest/pgtask
+module github.com/systemquest/pgqueue
 
 go 1.23.0
 

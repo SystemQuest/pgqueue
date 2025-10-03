@@ -25,9 +25,9 @@ import (
     "time"
 
     "github.com/jackc/pgx/v5"
-    "github.com/systemquest/pgtask/pkg/config"
-    "github.com/systemquest/pgtask/pkg/db"
-    "github.com/systemquest/pgtask/pkg/queries"
+    "github.com/systemquest/pgqueue/pkg/config"
+    "github.com/systemquest/pgqueue/pkg/db"
+    "github.com/systemquest/pgqueue/pkg/queries"
 )
 
 // TestDBConfig returns test database configuration
@@ -127,7 +127,7 @@ import (
     "testing"
     "time"
 
-    "github.com/systemquest/pgtask/pkg/queue"
+    "github.com/systemquest/pgqueue/pkg/queue"
     "github.com/stretchr/testify/assert"
 )
 
@@ -182,7 +182,7 @@ import (
 
     "github.com/stretchr/testify/assert"
     "github.com/stretchr/testify/require"
-    "github.com/systemquest/pgtask/test/testutil"
+    "github.com/systemquest/pgqueue/test/testutil"
 )
 
 // 迁移 test_job_queing - 基础作业排队测试

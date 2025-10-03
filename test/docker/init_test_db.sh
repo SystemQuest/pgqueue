@@ -9,8 +9,8 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres <<-EOSQL
     CREATE DATABASE testdb;
 EOSQL
 
-# Install schema using pgtask CLI (PgQueuer-aligned approach)
-echo "Installing schema using pgtask CLI..."
+# Install schema using pgqueue CLI (PgQueuer-aligned approach)
+echo "Installing schema using pgqueue CLI..."
 
 # Simple sleep to ensure PostgreSQL is ready (init scripts run after PostgreSQL is up)
 sleep 2
@@ -19,6 +19,6 @@ sleep 2
 DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@/testdb?host=/var/run/postgresql&sslmode=disable"
 
 # Use the CLI to install the schema - this is the single source of truth for schema
-pgtask install --database-url "$DATABASE_URL" --verbose
+pgqueue install --database-url "$DATABASE_URL" --verbose
 
 echo "Test database ready with schema installed via CLI!"

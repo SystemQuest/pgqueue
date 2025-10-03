@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/systemquest/pgtask/pkg/queries"
-	"github.com/systemquest/pgtask/test/testutil"
+	"github.com/systemquest/pgqueue/pkg/queries"
+	"github.com/systemquest/pgqueue/test/testutil"
 )
 
 // TestBatchEnqueuePerformance tests the optimized batch enqueue using unnest()

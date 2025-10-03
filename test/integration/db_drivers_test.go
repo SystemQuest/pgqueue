@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/systemquest/pgtask/test/testutil"
+	"github.com/systemquest/pgqueue/test/testutil"
 )
 
 // TestDatabaseFetchVal migrates pgqueuer's test_fetchval

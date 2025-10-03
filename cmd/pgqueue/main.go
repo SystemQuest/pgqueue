@@ -11,9 +11,9 @@ import (
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
-	"github.com/systemquest/pgtask/pkg/config"
-	"github.com/systemquest/pgtask/pkg/db"
-	"github.com/systemquest/pgtask/pkg/queries"
+	"github.com/systemquest/pgqueue/pkg/config"
+	"github.com/systemquest/pgqueue/pkg/db"
+	"github.com/systemquest/pgqueue/pkg/queries"
 )
 
 const version = "v0.1.0-dev"
@@ -41,9 +41,9 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "pgtask",
-	Short: "PgTask - PostgreSQL-based task queue system",
-	Long: `PgTask is a high-performance PostgreSQL-based task queue system for Go,
+	Use:   "pgqueue",
+	Short: "PgQueue - PostgreSQL-based task queue system",
+	Long: `PgQueue is a high-performance PostgreSQL-based task queue system for Go,
 inspired by PgQueuer. It leverages PostgreSQL's LISTEN/NOTIFY and FOR UPDATE SKIP LOCKED
 for efficient task processing.`,
 	Version: version,
@@ -112,9 +112,9 @@ func initConfig() {
 func addInstallCommand() {
 	installCmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install PgTask database schema",
+		Short: "Install PgQueue database schema",
 		Long: `Creates all necessary database objects including tables, indexes, 
-functions, and triggers for PgTask to operate.`,
+functions, and triggers for PgQueue to operate.`,
 		RunE: runInstall,
 	}
 
@@ -125,8 +125,8 @@ functions, and triggers for PgTask to operate.`,
 func addUninstallCommand() {
 	uninstallCmd := &cobra.Command{
 		Use:   "uninstall",
-		Short: "Uninstall PgTask database schema",
-		Long: `Removes all PgTask database objects including tables, indexes,
+		Short: "Uninstall PgQueue database schema",
+		Long: `Removes all PgQueue database objects including tables, indexes,
 functions, and triggers. Use with caution as this will delete all job data.`,
 		RunE: runUninstall,
 	}
@@ -138,8 +138,8 @@ functions, and triggers. Use with caution as this will delete all job data.`,
 func addUpgradeCommand() {
 	upgradeCmd := &cobra.Command{
 		Use:   "upgrade",
-		Short: "Upgrade PgTask database schema",
-		Long: `Upgrades the existing PgTask database schema to the latest version.
+		Short: "Upgrade PgQueue database schema",
+		Long: `Upgrades the existing PgQueue database schema to the latest version.
 This is safe to run multiple times.`,
 		RunE: runUpgrade,
 	}
@@ -180,8 +180,8 @@ Useful for debugging and monitoring queue events.`,
 func addTestCommand() {
 	testCmd := &cobra.Command{
 		Use:   "test",
-		Short: "Test PgTask functionality",
-		Long: `Runs end-to-end tests to verify PgTask installation and functionality.
+		Short: "Test PgQueue functionality",
+		Long: `Runs end-to-end tests to verify PgQueue installation and functionality.
 This will create test jobs and verify they are processed correctly.`,
 		RunE: runTest,
 	}
@@ -266,12 +266,12 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		q = queries.NewQueries(database.Pool())
 	}
 
-	logger.Info("Installing PgTask schema...")
+	logger.Info("Installing PgQueue schema...")
 	if err := q.Install(ctx); err != nil {
 		return fmt.Errorf("failed to install schema: %w", err)
 	}
 
-	logger.Info("PgTask schema installed successfully")
+	logger.Info("PgQueue schema installed successfully")
 	return nil
 }
 
@@ -319,12 +319,12 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 		q = queries.NewQueries(database.Pool())
 	}
 
-	logger.Info("Uninstalling PgTask schema...")
+	logger.Info("Uninstalling PgQueue schema...")
 	if err := q.Uninstall(ctx); err != nil {
 		return fmt.Errorf("failed to uninstall schema: %w", err)
 	}
 
-	logger.Info("PgTask schema uninstalled successfully")
+	logger.Info("PgQueue schema uninstalled successfully")
 	return nil
 }
 
@@ -376,12 +376,12 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 		q = queries.NewQueries(database.Pool())
 	}
 
-	logger.Info("Upgrading PgTask schema...")
+	logger.Info("Upgrading PgQueue schema...")
 	if err := q.Upgrade(ctx); err != nil {
 		return fmt.Errorf("failed to upgrade schema: %w", err)
 	}
 
-	logger.Info("PgTask schema upgraded successfully")
+	logger.Info("PgQueue schema upgraded successfully")
 	return nil
 }
 
@@ -515,7 +515,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	logger.Info("Running PgTask tests...")
+	logger.Info("Running PgQueue tests...")
 
 	// TODO: Implement comprehensive tests
 	logger.Info("Test functionality coming soon...")
@@ -538,7 +538,7 @@ func displayDashboard(ctx context.Context, q *queries.Queries, logger *slog.Logg
 	}
 
 	// Display header
-	fmt.Printf("PgTask Dashboard - %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Printf("PgQueue Dashboard - %s\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Printf("Showing last %d entries\n\n", tail)
 
 	if len(stats) == 0 {

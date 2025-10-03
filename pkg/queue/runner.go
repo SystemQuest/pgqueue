@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/systemquest/pgtask/pkg/listener"
+	"github.com/systemquest/pgqueue/pkg/listener"
 )
 
 // RunOptions contains configuration for running the queue manager

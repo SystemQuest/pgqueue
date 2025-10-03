@@ -3,7 +3,7 @@
 ## ✅ Completed Tasks (Week 1)
 
 ### Core Infrastructure
-- [x] Initialize Go module `github.com/systemquest/pgtask`
+- [x] Initialize Go module `github.com/systemquest/pgqueue`
 - [x] Setup project structure with standard Go layout
 - [x] Configure sqlc for PostgreSQL code generation
 - [x] Setup basic PostgreSQL connection scaffolding
@@ -52,8 +52,8 @@ Built with Go 1.21+
 
 # Tests partially working
 $ go test ./...
-ok  github.com/systemquest/pgtask/pkg/config  1.874s
-FAIL github.com/systemquest/pgtask/pkg/db [build failed]
+ok  github.com/systemquest/pgqueue/pkg/config  1.874s
+FAIL github.com/systemquest/pgqueue/pkg/db [build failed]
 ```
 
 ### Database Schema Status

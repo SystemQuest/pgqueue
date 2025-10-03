@@ -8,14 +8,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/systemquest/pgtask/pkg/config"
-	"github.com/systemquest/pgtask/pkg/db"
-	"github.com/systemquest/pgtask/pkg/queue"
+	"github.com/systemquest/pgqueue/pkg/config"
+	"github.com/systemquest/pgqueue/pkg/db"
+	"github.com/systemquest/pgqueue/pkg/queue"
 )
 
 // 演示第一阶段改进的验证脚本
 func main() {
-	slog.Info("🚀 PgTask Phase 1 Improvements Demonstration")
+	slog.Info("🚀 PgQueue Phase 1 Improvements Demonstration")
 
 	// 1. 数据库连接
 	dbURL := os.Getenv("DATABASE_URL")

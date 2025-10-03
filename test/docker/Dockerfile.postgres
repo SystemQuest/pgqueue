@@ -4,7 +4,7 @@ ENV POSTGRES_PASSWORD=testpassword
 
 # Copy pre-built Linux binary from host (much faster!)
 # Make sure to run 'make build-linux' first
-COPY bin/pgtask-linux /usr/local/bin/pgtask
+COPY bin/pgqueue-linux /usr/local/bin/pgqueue
 
 # Copy the database setup script  
 COPY --chmod=0755 test/docker/init_test_db.sh /docker-entrypoint-initdb.d/init_test_db.sh

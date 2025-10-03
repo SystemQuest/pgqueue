@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/systemquest/pgtask/pkg/taskmanager"
+	"github.com/systemquest/pgqueue/pkg/taskmanager"
 )
 
 // TestTaskManager migrates pgqueuer's test_task_manager

@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/systemquest/pgtask/pkg/queries"
+	"github.com/systemquest/pgqueue/pkg/queries"
 )
 
 // compareSQL简单地比较两个SQL字符串（忽略空白差异）

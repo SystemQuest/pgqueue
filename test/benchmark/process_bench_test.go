@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/systemquest/pgtask/pkg/queue"
-	"github.com/systemquest/pgtask/test/testutil"
+	"github.com/systemquest/pgqueue/pkg/queue"
+	"github.com/systemquest/pgqueue/test/testutil"
 )
 
 // BenchmarkProcessJobs benchmarks job processing throughput
