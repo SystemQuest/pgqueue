@@ -53,6 +53,7 @@ Run a 15-second benchmark with default settings:
 | `--enqueue-batch-size` | `-eqbs` | 20 | Batch size for enqueue operations |
 | `--db` | - | env:DATABASE_URL | PostgreSQL connection URL |
 | `--show-queue-size` | - | true | Display queue size periodically |
+| `--clear-db` | - | true | Clear database before benchmark |
 
 ## Examples
 
@@ -79,6 +80,19 @@ Test single worker performance:
 ```bash
 ./bin/benchmark -t 20 -dq 1 -dqbs 10 -eq 1 -eqbs 20
 ```
+
+### Skip Database Cleanup
+
+Continue testing with existing queue data:
+
+```bash
+./bin/benchmark -t 30 -dq 4 -clear-db=false
+```
+
+This is useful for:
+- Testing with pre-populated data
+- Benchmarking recovery after crashes
+- Measuring performance under queue backlog
 
 ## Output Example
 

@@ -26,6 +26,7 @@ type BenchmarkConfig struct {
 	DatabaseURL       string
 	ShowQueueSize     bool
 	QueueSizeInterval time.Duration
+	ClearDB           bool // Whether to clear database before benchmark
 }
 
 // Timer provides elapsed time tracking
@@ -212,6 +213,7 @@ func main() {
 
 	flag.StringVar(&cfg.DatabaseURL, "db", "", "Database connection URL")
 	flag.BoolVar(&cfg.ShowQueueSize, "show-queue-size", true, "Show queue size periodically")
+	flag.BoolVar(&cfg.ClearDB, "clear-db", true, "Clear database before benchmark (default: true)")
 
 	flag.Parse()
 
@@ -254,11 +256,15 @@ Enqueue Batch Size:     %d
 	}
 	defer utilDB.Close()
 
-	// Clear database
-	fmt.Println("Clearing database...")
-	if err := ClearDatabase(ctx, utilDB); err != nil {
-		slog.Error("Failed to clear database", "error", err)
-		os.Exit(1)
+	// Clear database if requested
+	if cfg.ClearDB {
+		fmt.Println("Clearing database...")
+		if err := ClearDatabase(ctx, utilDB); err != nil {
+			slog.Error("Failed to clear database", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Println("Skipping database cleanup (using existing data)...")
 	}
 
 	// Create context with timeout
