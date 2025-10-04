@@ -274,6 +274,7 @@ func (qb *QueryBuilder) CreateDequeueQuery() string {
 }
 
 // CreateCompleteJobQuery generates the SQL query to complete a job and log statistics
+// Note: This is for single job completion. For batch operations, use CreateBatchCompleteJobsQuery
 func (qb *QueryBuilder) CreateCompleteJobQuery() string {
 	return fmt.Sprintf(`
 		WITH deleted AS (
@@ -296,6 +297,71 @@ func (qb *QueryBuilder) CreateCompleteJobQuery() string {
 		DO UPDATE
 		SET count = %s.count + EXCLUDED.count`,
 		qb.Settings.QueueTable, qb.Settings.StatisticsTable, qb.Settings.StatisticsTableStatusType, qb.Settings.StatisticsTable)
+}
+
+// CreateBatchCompleteJobsQuery generates the SQL query to complete multiple jobs and log statistics in a single operation
+// This is aligned with PgQueuer's log_jobs() implementation which uses batch processing with SQL-level aggregation
+// to minimize database round-trips and reduce lock contention on the statistics table.
+//
+// The query performs:
+// 1. Batch delete from queue table using ANY($1::integer[])
+// 2. Map job IDs to their statuses using unnest()
+// 3. Aggregate jobs by dimensions (priority, entrypoint, time_in_queue, created, status) using GROUP BY
+// 4. Insert aggregated counts into statistics table with ON CONFLICT handling
+//
+// Example: 10 jobs with same dimensions -> 1 INSERT with count=10 (instead of 10 INSERTs with count=1)
+func (qb *QueryBuilder) CreateBatchCompleteJobsQuery() string {
+	return fmt.Sprintf(`
+		WITH deleted AS (
+			DELETE FROM %s
+			WHERE id = ANY($1::integer[])
+			RETURNING 
+				id,
+				priority,
+				entrypoint,
+				DATE_TRUNC('sec', created at time zone 'UTC') AS created,
+				DATE_TRUNC('sec', AGE(updated, created)) AS time_in_queue
+		),
+		job_status AS (
+			SELECT
+				unnest($1::integer[]) AS id,
+				unnest($2::%s[]) AS status
+		),
+		grouped_data AS (
+			SELECT
+				priority,
+				entrypoint,
+				time_in_queue,
+				created,
+				status,
+				count(*) AS count
+			FROM deleted 
+			JOIN job_status ON job_status.id = deleted.id
+			GROUP BY priority, entrypoint, time_in_queue, created, status
+		)
+		INSERT INTO %s (priority, entrypoint, time_in_queue, created, status, count)
+		SELECT 
+			priority,
+			entrypoint,
+			time_in_queue,
+			created,
+			status,
+			count
+		FROM grouped_data
+		ON CONFLICT (
+			priority,
+			entrypoint,
+			DATE_TRUNC('sec', created at time zone 'UTC'),
+			DATE_TRUNC('sec', time_in_queue),
+			status
+		)
+		DO UPDATE
+		SET count = %s.count + EXCLUDED.count`,
+		qb.Settings.QueueTable,
+		qb.Settings.StatisticsTableStatusType,
+		qb.Settings.StatisticsTable,
+		qb.Settings.StatisticsTable,
+	)
 }
 
 // CreateQueueSizeQuery generates the SQL query to count jobs in the queue

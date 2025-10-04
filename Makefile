@@ -9,7 +9,7 @@ BUILD_DIR := bin
 
 ## Show available commands
 help:
-	@echo "PgTask - PostgreSQL Task Queue (aligned with pgqueuer)"
+	@echo "PgQueue - PostgreSQL Task Queue (aligned with pgqueuer)"
 	@echo ""
 	@echo "Available commands:"
 	@echo "  test        - Run all tests (unit + integration)"
