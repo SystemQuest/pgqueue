@@ -59,4 +59,5 @@ docker-compose.override.yml
 # Build artifacts
 dist/
 build/
-bin/cmd/benchmark/benchmark
+bin/
+cmd/benchmark/benchmark
